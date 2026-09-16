@@ -23,8 +23,6 @@ const ADMIN_MENU: MenuItem[] = [
   { label: "Roles", href: "/administracion/roles", permission: "roles.manage", built: true },
   { label: "Organismos", href: "/administracion/organismos", permission: "organizations.manage", built: true },
   { label: "Campos personalizados", href: "/administracion/campos-personalizados", permission: "people.manage_custom_fields", built: true },
-  { label: "Auditoría", href: "/administracion/auditoria", permission: "audit.view", built: false },
-  { label: "Configuración", href: "/administracion/configuracion", permission: "settings.edit", built: false },
 ];
 
 function MenuLink({ item }: { item: MenuItem }) {

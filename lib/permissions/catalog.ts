@@ -40,7 +40,6 @@ export const PERMISSIONS = [
   { key: "users.manage", description: "Crear/editar/desactivar usuarios (no incluye rol MASTER_GLOBAL)" },
   { key: "roles.manage", description: "Editar la matriz de permisos de roles" },
   { key: "audit.view", description: "Ver el registro de auditoría" },
-  { key: "settings.edit", description: "Editar configuración general" },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
