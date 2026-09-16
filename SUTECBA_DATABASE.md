@@ -18,6 +18,15 @@ npm run typecheck
 Para apuntar a un Postgres real (staging/producción, o un local que el usuario instale después), alcanza con definir `SUTECBA_DATABASE_URL` en `.env`; el código de acceso a datos (`lib/db/client.ts`) no cambia.
 
 > **Importante**: nunca correr `npm run migrate`/`npm run seed`/un script suelto contra `.data/pglite-local` mientras `npm run dev` está corriendo. PGlite es un motor embebido por proceso: dos instancias abiertas contra el mismo directorio no se sincronizan entre sí (mismo problema de fondo que el addendum de la Etapa 3 en `SUTECBA_ARCHITECTURE.md`, pero esta vez entre dos procesos de Node en vez de entre capas de Next). Pasó de verdad probando la Etapa 4: se corrió `npm run seed` con el dev server abierto y el server siguió sin ver el permiso nuevo hasta reiniciarlo. Regla: **parar el dev server antes de correr cualquier script de base, siempre.**
+>
+> **Más importante todavía**: parar el dev server casi siempre significa matarlo de forma abrupta (`Stop-Process -Force`/`kill -9`), porque en la práctica no hay una señal de cierre prolijo disponible para pararlo de otra forma. Eso puede **corromper** `.data/pglite-local` de verdad — pasó en la Etapa 5, el archivo quedó irrecuperable (`RuntimeError: Aborted()` del runtime WASM de PGlite al reabrirlo). Por diseño, `.data/pglite-local` es descartable: si esto pasa, se recrea en un minuto y no se pierde nada versionado ni ningún test (cada test usa su propio directorio en `.data/pglite-test-<uuid>`, nunca este).
+>
+> ```bash
+> rm -rf .data/pglite-local
+> npm run migrate
+> npm run seed
+> npm run create-admin -- --email=... --name="..."
+> ```
 
 ## 2. Guardas del runner (`lib/db/guards.ts`, `scripts/migrate.ts`, `scripts/seed.ts`)
 

@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { DataGrid } from "@/components/grid/DataGrid";
 import type { PeopleFilterSpec, PeopleSort } from "@/lib/people/queries";
-import { bulkSetActiveAction } from "./acciones";
+import { bulkAddToAssociationAction, bulkSetActiveAction } from "./acciones";
 
 export interface PersonDisplayRow {
   id: string;
@@ -38,6 +38,8 @@ export function PeopleGrid({
   filter,
   canExport,
   canDeactivate,
+  canAddToAssociation,
+  associations,
   exportQueryString,
 }: {
   rows: PersonDisplayRow[];
@@ -48,6 +50,8 @@ export function PeopleGrid({
   filter: PeopleFilterSpec;
   canExport: boolean;
   canDeactivate: boolean;
+  canAddToAssociation: boolean;
+  associations: Array<{ id: string; name: string }>;
   exportQueryString: string;
 }) {
   // Selección acumulada entre páginas (sección 9): vive en este componente,
@@ -57,6 +61,7 @@ export function PeopleGrid({
   const [selectAllMatching, setSelectAllMatching] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [bulkPending, setBulkPending] = useState(false);
+  const [targetAssociationId, setTargetAssociationId] = useState("");
 
   const columnDefs = useMemo<ColDef<PersonDisplayRow>[]>(
     () => [
@@ -122,6 +127,24 @@ export function PeopleGrid({
     }
   }
 
+  async function runAddToAssociation() {
+    if (!targetAssociationId) return;
+    setBulkPending(true);
+    setBulkMessage(null);
+    const selection: Parameters<typeof bulkSetActiveAction>[0] = selectAllMatching
+      ? { mode: "filter", filter }
+      : { mode: "ids", ids: [...selectedIds] };
+    const result = await bulkAddToAssociationAction(selection, targetAssociationId);
+    setBulkPending(false);
+    if (result.ok) {
+      setBulkMessage(`${result.count ?? 0} persona(s) agregadas a la asociación.`);
+      setSelectedIds(new Set());
+      setSelectAllMatching(false);
+    } else {
+      setBulkMessage(result.error ?? "No se pudo agregar.");
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3 text-sm text-brand-700">
@@ -173,6 +196,30 @@ export function PeopleGrid({
                 Reactivar seleccionadas
               </button>
             </>
+          ) : null}
+          {canAddToAssociation && associations.length > 0 ? (
+            <span className="flex items-center gap-1">
+              <select
+                value={targetAssociationId}
+                onChange={(e) => setTargetAssociationId(e.target.value)}
+                className="rounded-md border border-brand-200 px-2 py-1 text-xs"
+              >
+                <option value="">— elegir asociación —</option>
+                {associations.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={bulkPending || !targetAssociationId}
+                onClick={runAddToAssociation}
+                className="text-brand-600 hover:underline disabled:opacity-50"
+              >
+                Agregar a asociación
+              </button>
+            </span>
           ) : null}
           <button
             type="button"

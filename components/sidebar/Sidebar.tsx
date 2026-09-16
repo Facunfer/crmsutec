@@ -12,7 +12,7 @@ interface MenuItem {
 const MAIN_MENU: MenuItem[] = [
   { label: "Dashboard", href: "/dashboard", permission: "dashboard.view", built: true },
   { label: "Personas", href: "/personas", permission: "people.view", built: true },
-  { label: "Asociaciones", href: "/asociaciones", permission: "associations.view", built: false },
+  { label: "Asociaciones", href: "/asociaciones", permission: "associations.view", built: true },
   { label: "Reuniones", href: "/reuniones", permission: "meetings.view", built: false },
   { label: "Formularios", href: "/formularios", permission: "forms.view", built: false },
   { label: "Visualización", href: "/visualizacion", permission: "visualization.view", built: false },

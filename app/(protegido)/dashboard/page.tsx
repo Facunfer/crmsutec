@@ -13,6 +13,10 @@ export default async function DashboardPage() {
     .selectFrom("people")
     .select(({ fn }) => fn.count<number>("id").as("count"))
     .executeTakeFirstOrThrow();
+  const { count: associationCount } = await db
+    .selectFrom("associations")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .executeTakeFirstOrThrow();
 
   return (
     <div>
@@ -26,10 +30,14 @@ export default async function DashboardPage() {
           <div className="text-2xl font-semibold text-brand-700">{peopleCount}</div>
           <div className="text-sm text-brand-500">Personas cargadas</div>
         </div>
+        <div className="rounded-lg bg-white p-4 shadow-sm">
+          <div className="text-2xl font-semibold text-brand-700">{associationCount}</div>
+          <div className="text-sm text-brand-500">Asociaciones</div>
+        </div>
       </div>
       <p className="mt-8 text-sm text-brand-400">
-        Asociaciones, Reuniones, Formularios y Visualización todavía no están disponibles — se
-        construyen en las próximas etapas.
+        Reuniones, Formularios y Visualización todavía no están disponibles — se construyen en
+        las próximas etapas.
       </p>
     </div>
   );

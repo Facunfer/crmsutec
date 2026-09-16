@@ -25,9 +25,33 @@ interface SutecbaDbGlobal {
     kysely: Kysely<Database>;
     pglite: KyselyPGlite | null;
   }>;
+  __sutecbaShutdownHookRegistered?: boolean;
 }
 
 const globalForDb = globalThis as unknown as SutecbaDbGlobal;
+
+/**
+ * PGlite es un motor embebido: si el proceso muere sin pasar por
+ * `pglite.close()` (p. ej. `kill -9`/`Stop-Process -Force`, sin
+ * oportunidad de flushear), el directorio de datos puede quedar corrupto
+ * — nos pasó de verdad, ver el addendum de la Etapa 5 en
+ * SUTECBA_ARCHITECTURE.md. Esto es best-effort: ayuda ante un SIGTERM
+ * normal (systemd/PM2 al reiniciar), pero un `-Force`/`kill -9` sigue sin
+ * poder atraparse en Node. Por eso `.data/pglite-local` se trata siempre
+ * como descartable, nunca como la única copia de algo importante.
+ */
+function registerShutdownHookOnce(): void {
+  if (globalForDb.__sutecbaShutdownHookRegistered) return;
+  globalForDb.__sutecbaShutdownHookRegistered = true;
+
+  const shutdown = () => {
+    closeDb()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
 
 async function buildConnection(): Promise<{
   kysely: Kysely<Database>;
@@ -56,6 +80,7 @@ async function buildConnection(): Promise<{
 
 function connection() {
   if (!globalForDb.__sutecbaDbConnection) {
+    registerShutdownHookOnce();
     globalForDb.__sutecbaDbConnection = buildConnection();
   }
   return globalForDb.__sutecbaDbConnection;

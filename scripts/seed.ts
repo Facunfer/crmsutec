@@ -37,6 +37,22 @@ const ORGANIZATION_TYPES: Array<{ key: string; name: string; level: number }> = 
   { key: "jubilados_pensionados", name: "Jubilados y pensionados", level: 0 },
 ];
 
+/**
+ * Estructura interna del sindicato tal como la describe la sección 4 del
+ * prompt (delegados, congresales, Consejo Directivo, comisiones,
+ * agrupaciones, grupos de trabajo). Es taxonomía genérica del tipo de
+ * organización, no contenido de este cliente en particular: nombres de
+ * dirigentes o asociaciones concretas no se siembran nunca.
+ */
+const ASSOCIATION_TYPES: Array<{ key: string; name: string }> = [
+  { key: "delegados_personal", name: "Delegados del personal" },
+  { key: "delegados_congresales", name: "Delegados congresales" },
+  { key: "consejo_directivo", name: "Consejo Directivo" },
+  { key: "comision", name: "Comisión" },
+  { key: "agrupacion", name: "Agrupación" },
+  { key: "grupo_trabajo", name: "Grupo de trabajo" },
+];
+
 /** Reutilizable desde el CLI y desde tests de integración. No cierra la conexión. */
 export async function runSeed(): Promise<void> {
   const env = loadEnv();
@@ -117,6 +133,14 @@ export async function runSeed(): Promise<void> {
       .execute();
   }
 
+  for (const type of ASSOCIATION_TYPES) {
+    await db
+      .insertInto("association_types")
+      .values({ key: type.key, name: type.name })
+      .onConflict((oc) => oc.column("key").doUpdateSet({ name: type.name }))
+      .execute();
+  }
+
   for (const setting of DEFAULT_SETTINGS) {
     await db
       .insertInto("app_settings")
@@ -127,9 +151,9 @@ export async function runSeed(): Promise<void> {
 
   console.log(
     `[seed] listo. ${ROLES.length} roles, ${PERMISSIONS.length} permisos, ` +
-      `${ORGANIZATION_TYPES.length} tipos de organismo, ` +
+      `${ORGANIZATION_TYPES.length} tipos de organismo, ${ASSOCIATION_TYPES.length} tipos de asociación, ` +
       `${DEFAULT_SETTINGS.length} configuraciones por defecto (sin sobreescribir existentes). ` +
-      `Sin personas ni organismos concretos de ejemplo.`
+      `Sin personas, organismos ni asociaciones concretas de ejemplo.`
   );
 }
 

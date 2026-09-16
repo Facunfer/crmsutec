@@ -4,6 +4,7 @@ import { can } from "@/lib/permissions/can";
 import { computeDisplayAge, listPeoplePage, type PeopleFilterSpec, type PeopleSort } from "@/lib/people/queries";
 import { applyMasking } from "@/lib/people/masking";
 import { listActiveOrganizationOptions } from "@/lib/organizations/queries";
+import { listAssociations } from "@/lib/associations/queries";
 import { FilterBar } from "./FilterBar";
 import { PeopleGrid, type PersonDisplayRow } from "./PeopleGrid";
 
@@ -30,10 +31,12 @@ export default async function PersonasPage({
   };
   const page = sp.page ? Math.max(1, Number(sp.page)) : 1;
 
-  const [{ rows, total }, organizations] = await Promise.all([
+  const [{ rows, total }, organizations, associations] = await Promise.all([
     listPeoplePage(filter, sort, page, PAGE_SIZE),
     listActiveOrganizationOptions(),
+    can(actor, "associations.manage_members") ? listAssociations() : Promise.resolve([]),
   ]);
+  const activeAssociations = associations.filter((a) => a.status === "active");
 
   const canSeeSensitive = can(actor, "people.view_sensitive");
   const displayRows: PersonDisplayRow[] = rows.map((row) => {
@@ -87,6 +90,8 @@ export default async function PersonasPage({
         filter={filter}
         canExport={can(actor, "people.export")}
         canDeactivate={can(actor, "people.deactivate")}
+        canAddToAssociation={can(actor, "associations.manage_members")}
+        associations={activeAssociations.map((a) => ({ id: a.id, name: a.name }))}
         exportQueryString={exportParams.toString()}
       />
     </div>

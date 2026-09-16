@@ -13,6 +13,7 @@ import {
 } from "@/lib/people/commands";
 import { parsePersonForm } from "@/lib/people/schema";
 import { listAllMatchingIds, type PeopleFilterSpec } from "@/lib/people/queries";
+import { bulkAddMembers } from "@/lib/associations/members";
 import { z } from "zod";
 
 export interface PersonActionResult {
@@ -114,5 +115,22 @@ export async function bulkSetActiveAction(
     return { ok: true, count };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "No se pudo actualizar." };
+  }
+}
+
+/** "Alta masiva desde una selección/filtro de Personas" hacia una asociación (sección 10 del prompt). */
+export async function bulkAddToAssociationAction(
+  selection: BulkSelection,
+  associationId: string
+): Promise<{ ok: boolean; error?: string; count?: number }> {
+  const actor = await requireUser();
+  try {
+    const ids = selection.mode === "ids" ? selection.ids : await listAllMatchingIds(selection.filter);
+    const count = await bulkAddMembers(actor, associationId, ids);
+    revalidatePath("/personas");
+    revalidatePath(`/asociaciones/${associationId}`);
+    return { ok: true, count };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "No se pudo agregar a la asociación." };
   }
 }

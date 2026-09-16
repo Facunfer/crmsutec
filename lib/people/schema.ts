@@ -14,7 +14,12 @@ export const personInputSchema = z.object({
   phone: z.string().trim().optional().or(z.literal("")),
   organizationId: z.string().uuid().optional().or(z.literal("")),
   birthDate: z.string().optional().or(z.literal("")),
-  declaredAge: z.coerce.number().int().min(0).max(130).optional().or(z.literal("")),
+  // El orden importa: si el número fuera primero, `z.coerce.number()`
+  // convierte "" en 0 (Number("") === 0) y ese 0 "pasa" como edad válida
+  // antes de llegar a la alternativa de cadena vacía. Pasó de verdad
+  // probando el alta en el navegador: quedaba guardada una edad de 0 para
+  // cualquier persona que dejara el campo en blanco.
+  declaredAge: z.literal("").or(z.coerce.number().int().min(0).max(130)),
 });
 
 export type PersonInput = z.infer<typeof personInputSchema>;
