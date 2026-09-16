@@ -1,0 +1,30 @@
+{
+  "name": "sutecba-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate": "tsx scripts/migrate.ts",
+    "migrate:test": "SUTECBA_ENV=test tsx scripts/migrate.ts",
+    "seed": "tsx scripts/seed.ts",
+    "seed:test": "SUTECBA_ENV=test tsx scripts/seed.ts",
+    "create-admin": "tsx scripts/create-admin.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "bcryptjs": "^3.0.3",
+    "kysely": "^0.28.17",
+    "kysely-pglite": "^0.6.1",
+    "pg": "^8.23.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.1",
+    "typescript": "^5.5.4",
+    "vitest": "^3.2.4"
+  }
+}
