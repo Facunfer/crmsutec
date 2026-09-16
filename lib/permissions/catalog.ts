@@ -77,6 +77,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
   ADMIN: ALL_PERMISSION_KEYS.filter((k) => k !== "roles.manage"),
   OPERADOR: [
     "dashboard.view",
+    "visualization.view",
     "people.view",
     "people.create",
     "people.edit",
@@ -91,6 +92,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "meetings.change_status",
     "meetings.manage_invitations",
     "meetings.attendance_manual",
+    "forms.view",
+    "forms.create",
+    "forms.edit",
+    "forms.publish",
+    "forms.review_duplicates",
   ],
   REUNIONES: [
     "dashboard.view",

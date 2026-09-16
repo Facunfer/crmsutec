@@ -32,6 +32,10 @@ export default async function DashboardPage() {
     .where("withdrawn_at", "is", null)
     .where("response_status", "=", "confirmed")
     .executeTakeFirstOrThrow();
+  const { count: submissionCount } = await db
+    .selectFrom("form_submissions")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .executeTakeFirstOrThrow();
 
   return (
     <div>
@@ -61,10 +65,13 @@ export default async function DashboardPage() {
           <div className="text-2xl font-semibold text-brand-700">{confirmedCount}</div>
           <div className="text-sm text-brand-500">Confirmaciones</div>
         </div>
+        <div className="rounded-lg bg-white p-4 shadow-sm">
+          <div className="text-2xl font-semibold text-brand-700">{submissionCount}</div>
+          <div className="text-sm text-brand-500">Envíos de formularios</div>
+        </div>
       </div>
       <p className="mt-8 text-sm text-brand-400">
-        Formularios y Visualización todavía no están disponibles — se construyen en las próximas
-        etapas.
+        Para gráficos y tendencias, ver <a href="/visualizacion" className="text-brand-600 hover:underline">Visualización</a>.
       </p>
     </div>
   );

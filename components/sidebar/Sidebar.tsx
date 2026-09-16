@@ -15,7 +15,7 @@ const MAIN_MENU: MenuItem[] = [
   { label: "Asociaciones", href: "/asociaciones", permission: "associations.view", built: true },
   { label: "Reuniones", href: "/reuniones", permission: "meetings.view", built: true },
   { label: "Formularios", href: "/formularios", permission: "forms.view", built: true },
-  { label: "Visualización", href: "/visualizacion", permission: "visualization.view", built: false },
+  { label: "Visualización", href: "/visualizacion", permission: "visualization.view", built: true },
 ];
 
 const ADMIN_MENU: MenuItem[] = [

@@ -139,15 +139,11 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
             </tbody>
           </table>
         ) : (
-          <p className="mb-4 text-sm text-brand-400">
-            Sin reuniones registradas todavía — el módulo de Reuniones se construye en la Etapa 6.
-          </p>
+          <p className="mb-4 text-sm text-brand-400">Todavía no fue invitada a ninguna reunión.</p>
         )}
 
         {formSubmissions.length === 0 ? (
-          <p className="text-sm text-brand-400">
-            Sin formularios completados todavía — el módulo de Formularios se construye en la Etapa 8.
-          </p>
+          <p className="text-sm text-brand-400">Todavía no completó ningún formulario.</p>
         ) : (
           <ul className="text-sm">
             {formSubmissions.map((f) => (
