@@ -21,6 +21,22 @@ const DEFAULT_SETTINGS: Array<{ key: string; value: Json }> = [
   { key: "invitation_response_editable_until_meeting_start", value: true },
 ];
 
+/**
+ * Niveles genéricos de la estructura del Estado (sección 4 del prompt: tres
+ * poderes, entes autárquicos, Legislatura, entes públicos no estatales,
+ * jubilados/pensionados). Es taxonomía, no datos de negocio: los organismos
+ * concretos (ej. "Ministerio de Educación") los carga un administrador
+ * desde /administracion/organismos, nunca un seed.
+ */
+const ORGANIZATION_TYPES: Array<{ key: string; name: string; level: number }> = [
+  { key: "poder", name: "Poder", level: 0 },
+  { key: "ministerio", name: "Ministerio", level: 1 },
+  { key: "ente_autarquico", name: "Ente autárquico", level: 1 },
+  { key: "ente_publico_no_estatal", name: "Ente público no estatal", level: 1 },
+  { key: "dependencia", name: "Dependencia", level: 2 },
+  { key: "jubilados_pensionados", name: "Jubilados y pensionados", level: 0 },
+];
+
 /** Reutilizable desde el CLI y desde tests de integración. No cierra la conexión. */
 export async function runSeed(): Promise<void> {
   const env = loadEnv();
@@ -93,6 +109,14 @@ export async function runSeed(): Promise<void> {
     }
   }
 
+  for (const type of ORGANIZATION_TYPES) {
+    await db
+      .insertInto("organization_types")
+      .values({ key: type.key, name: type.name, level: type.level })
+      .onConflict((oc) => oc.column("key").doUpdateSet({ name: type.name, level: type.level }))
+      .execute();
+  }
+
   for (const setting of DEFAULT_SETTINGS) {
     await db
       .insertInto("app_settings")
@@ -103,8 +127,9 @@ export async function runSeed(): Promise<void> {
 
   console.log(
     `[seed] listo. ${ROLES.length} roles, ${PERMISSIONS.length} permisos, ` +
+      `${ORGANIZATION_TYPES.length} tipos de organismo, ` +
       `${DEFAULT_SETTINGS.length} configuraciones por defecto (sin sobreescribir existentes). ` +
-      `Sin personas de ejemplo.`
+      `Sin personas ni organismos concretos de ejemplo.`
   );
 }
 

@@ -22,7 +22,7 @@ afterAll(async () => {
   // PGlite puede tener una escritura en disco pendiente justo después de
   // destroy(); una pequeña espera evita un ENOENT de fondo al borrar el dir.
   await new Promise((resolve) => setTimeout(resolve, 100));
-  rmSync(dataDir, { recursive: true, force: true });
+  rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("guardas de entorno", () => {

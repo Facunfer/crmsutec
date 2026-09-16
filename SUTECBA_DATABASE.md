@@ -17,6 +17,8 @@ npm run typecheck
 
 Para apuntar a un Postgres real (staging/producción, o un local que el usuario instale después), alcanza con definir `SUTECBA_DATABASE_URL` en `.env`; el código de acceso a datos (`lib/db/client.ts`) no cambia.
 
+> **Importante**: nunca correr `npm run migrate`/`npm run seed`/un script suelto contra `.data/pglite-local` mientras `npm run dev` está corriendo. PGlite es un motor embebido por proceso: dos instancias abiertas contra el mismo directorio no se sincronizan entre sí (mismo problema de fondo que el addendum de la Etapa 3 en `SUTECBA_ARCHITECTURE.md`, pero esta vez entre dos procesos de Node en vez de entre capas de Next). Pasó de verdad probando la Etapa 4: se corrió `npm run seed` con el dev server abierto y el server siguió sin ver el permiso nuevo hasta reiniciarlo. Regla: **parar el dev server antes de correr cualquier script de base, siempre.**
+
 ## 2. Guardas del runner (`lib/db/guards.ts`, `scripts/migrate.ts`, `scripts/seed.ts`)
 
 Se ejecutan siempre, antes de tocar cualquier tabla:
@@ -54,7 +56,7 @@ Las tres primeras guardas más el mecanismo de append-only de `audit_logs` y el 
 - **DNI**: `dni text` con índice único parcial `where dni is not null and status <> 'merged'` — permite reingresar el mismo DNI solo después de que la fila anterior fue fusionada. Para cambiar esta política (por ejemplo, aceptar DNI duplicado con otro criterio) se reemplaza este índice por migración, documentando el motivo acá.
 - **Edad** (D7): `birth_date` calculado en consulta, o `declared_age` + `declared_age_at` si solo se conoce una edad declarada en un momento dado. Nunca un número de edad guardado sin fecha de referencia.
 - **Promoción de un campo personalizado a columna real**: (1) migración que agrega la columna, (2) `update people set columna_nueva = custom_fields->>'clave'`, (3) desactivar (`active=false`) la definición en `person_field_definitions` sin borrarla (conserva el histórico de qué significaba esa clave).
-- Búsqueda por nombre/apellido sin acentos (`unaccent`/`pg_trgm`): **pendiente de verificar** si PGlite soporta esas extensiones; si no, se resuelve normalizando acentos en la capa de aplicación antes de filtrar. Se decide en la Etapa 4 cuando se implemente el buscador.
+- **Búsqueda por nombre/apellido sin acentos — resuelto en la Etapa 4, parcialmente**: PGlite sí trae `pg_trgm`/`unaccent` como módulos "contrib" importables (`@electric-sql/pglite/contrib/{pg_trgm,unaccent}`), pasados como `extensions` al crear la instancia (`lib/db/client.ts`) y habilitados con `CREATE EXTENSION` (migración `0009_search_extensions.sql`). Lo que **no** funcionó fue indexar una expresión que envuelve `unaccent()` en una función propia `IMMUTABLE`: PGlite tira `function unaccent(text) does not exist` al crear el índice, aunque la función figura en `pg_proc` — parece un bug/límite de su motor con la resolución de funciones de extensión dentro de otra función SQL. Se abandonó el índice de expresión (no hay `0010`) y la búsqueda de personas usa `ILIKE` simple (sensible a acentos) hasta que esto se resuelva o se migre a un Postgres real, donde el mismo SQL debería funcionar sin este problema — no reintentar sin primero probarlo contra Postgres de verdad.
 
 ### Asociaciones (`0004_associations.sql`)
 
@@ -92,6 +94,6 @@ Ninguna tabla de trazabilidad tiene `on delete cascade`/`set null` hacia `people
 ## 5. Pendiente explícito de esta etapa
 
 - No hay una instancia de Postgres real probada todavía (solo PGlite local) — la rama `SUTECBA_DATABASE_URL` de `lib/db/client.ts` está escrita pero sin ejercitar.
-- `unaccent`/`pg_trgm` para búsqueda: a confirmar en Etapa 4.
+- `unaccent`/`pg_trgm` para búsqueda: extensiones habilitadas, pero el índice de expresión con `unaccent` no funciona en PGlite (ver sección 3, Personas) — búsqueda hoy es `ILIKE` sensible a acentos. Reintentar el índice cuando haya un Postgres real.
 - El detalle de campos "previstos a futuro" en `people` (domicilio, barrio, situación laboral, número de afiliado, etc. — sección 7.2 del prompt) queda modelado vía `custom_fields`/`person_field_definitions` hasta que se decida cuáles son núcleo.
 - Afiliación sindical y cualquier campo que la revele: cuando se cargue, debe pasar por `person_field_definitions.sensitive=true` y el permiso `people.view_sensitive` — no hay todavía UI para cargarlo (Etapa 4/9), y la recomendación de validación legal queda para `docs/datos-personales.md` (Etapa 19).

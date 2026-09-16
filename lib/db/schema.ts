@@ -7,6 +7,13 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
  * nunca el objeto de JS tal cual — así se refleja en los tipos de insert/update.
  */
 export type JsonColumn<T extends Json = Json> = ColumnType<T, string, string>;
+/**
+ * Para columnas jsonb con default en la base (ej. '{}'::jsonb): el insert
+ * es opcional. No envolver esto en `Generated<...>` — `Generated<T>` espera
+ * que T sea el tipo de valor real, no otro ColumnType, y anidar dos
+ * ColumnType rompe la inferencia de Kysely en `insertInto(...).values()`.
+ */
+export type JsonColumnWithDefault<T extends Json = Json> = ColumnType<T, string | undefined, string>;
 
 export interface RolesTable {
   id: Generated<string>;
@@ -97,7 +104,7 @@ export interface PeopleTable {
   declared_age_at: Date | null;
   status: Generated<PersonStatus>;
   merged_into_id: string | null;
-  custom_fields: Generated<JsonColumn<Record<string, Json>>>;
+  custom_fields: JsonColumnWithDefault<Record<string, Json>>;
   origin: Generated<PersonOrigin>;
   version: Generated<number>;
   created_at: Generated<Date>;
@@ -254,7 +261,7 @@ export interface FormsTable {
   consent_text: string | null;
   opens_at: Date | null;
   closes_at: Date | null;
-  identification_policy: Generated<JsonColumn>;
+  identification_policy: JsonColumnWithDefault;
   update_policy: Generated<"fill_empty_only" | "always_flag_for_review">;
   published_version: number | null;
   created_at: Generated<Date>;
@@ -298,7 +305,7 @@ export interface FormSubmissionsTable {
   form_id: string;
   form_version: number;
   raw_payload: JsonColumn;
-  normalized_values: Generated<JsonColumn>;
+  normalized_values: JsonColumnWithDefault;
   match_result: Generated<SubmissionMatchResult>;
   person_id: string | null;
   idempotency_key: string;

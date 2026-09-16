@@ -11,7 +11,7 @@ interface MenuItem {
 
 const MAIN_MENU: MenuItem[] = [
   { label: "Dashboard", href: "/dashboard", permission: "dashboard.view", built: true },
-  { label: "Personas", href: "/personas", permission: "people.view", built: false },
+  { label: "Personas", href: "/personas", permission: "people.view", built: true },
   { label: "Asociaciones", href: "/asociaciones", permission: "associations.view", built: false },
   { label: "Reuniones", href: "/reuniones", permission: "meetings.view", built: false },
   { label: "Formularios", href: "/formularios", permission: "forms.view", built: false },
@@ -21,6 +21,7 @@ const MAIN_MENU: MenuItem[] = [
 const ADMIN_MENU: MenuItem[] = [
   { label: "Usuarios", href: "/administracion/usuarios", permission: "users.manage", built: true },
   { label: "Roles", href: "/administracion/roles", permission: "roles.manage", built: true },
+  { label: "Organismos", href: "/administracion/organismos", permission: "organizations.manage", built: true },
   { label: "Auditoría", href: "/administracion/auditoria", permission: "audit.view", built: false },
   { label: "Configuración", href: "/administracion/configuracion", permission: "settings.edit", built: false },
 ];

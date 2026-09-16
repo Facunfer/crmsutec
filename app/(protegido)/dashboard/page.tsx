@@ -28,8 +28,8 @@ export default async function DashboardPage() {
         </div>
       </div>
       <p className="mt-8 text-sm text-brand-400">
-        Personas, Asociaciones, Reuniones, Formularios y Visualización todavía no están
-        disponibles — se construyen en las próximas etapas.
+        Asociaciones, Reuniones, Formularios y Visualización todavía no están disponibles — se
+        construyen en las próximas etapas.
       </p>
     </div>
   );

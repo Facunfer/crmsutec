@@ -14,6 +14,8 @@ export const PERMISSIONS = [
   { key: "people.export", description: "Exportar personas a CSV" },
   { key: "people.view_sensitive", description: "Ver DNI/teléfono/email sin enmascarar" },
 
+  { key: "organizations.manage", description: "Administrar el catálogo de organismos (tipos y jerarquía)" },
+
   { key: "associations.view", description: "Ver asociaciones y sus miembros" },
   { key: "associations.create", description: "Crear asociaciones" },
   { key: "associations.edit", description: "Editar asociaciones" },

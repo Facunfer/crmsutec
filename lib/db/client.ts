@@ -1,6 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { Kysely, PostgresDialect, type Dialect } from "kysely";
 import { KyselyPGlite } from "kysely-pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
+import { unaccent } from "@electric-sql/pglite/contrib/unaccent";
 import { Pool } from "pg";
 import { assertServerOnly } from "../server-only.js";
 import { loadEnv, resolvePgliteDataDir } from "./env.js";
@@ -45,7 +47,10 @@ async function buildConnection(): Promise<{
 
   const dataDir = resolvePgliteDataDir(env);
   mkdirSync(dataDir, { recursive: true });
-  const pglite = await KyselyPGlite.create(dataDir);
+  // pg_trgm/unaccent no vienen precargados en PGlite: hay que pasarlos como
+  // "extensions" al crear la instancia para poder hacer CREATE EXTENSION
+  // (búsqueda de personas sin distinguir acentos, sección 7.2 de SUTECBA_DATABASE.md).
+  const pglite = await KyselyPGlite.create(dataDir, { extensions: { pg_trgm, unaccent } });
   return { kysely: new Kysely<Database>({ dialect: pglite.dialect }), pglite };
 }
 

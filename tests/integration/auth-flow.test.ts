@@ -57,7 +57,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeDb();
   await new Promise((resolve) => setTimeout(resolve, 100));
-  rmSync(dataDir, { recursive: true, force: true });
+  rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("comandos de usuarios: reglas anti-bloqueo (sección 8)", () => {
