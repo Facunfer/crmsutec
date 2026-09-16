@@ -71,7 +71,7 @@ export default async function AsociacionFichaPage({ params }: { params: Promise<
           <span>
             {metrics.averageAttendanceRate !== null
               ? `${metrics.averageAttendanceRate}% asistencia promedio`
-              : "asistencia promedio: sin datos todavía (Etapa 6)"}
+              : "sin datos de asistencia todavía"}
           </span>
         </div>
         {can(actor, "meetings.create") ? (

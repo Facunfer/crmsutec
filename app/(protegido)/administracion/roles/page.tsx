@@ -8,15 +8,7 @@ export default async function RolesPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold text-brand-900">Roles y permisos</h1>
-        <p className="text-sm text-brand-500">
-          Vista de solo lectura. El catálogo de permisos y su asignación por rol se define en
-          código (<code className="rounded bg-brand-100 px-1">lib/permissions/catalog.ts</code>) y
-          se sincroniza con <code className="rounded bg-brand-100 px-1">npm run seed</code>. Edición
-          desde la UI: no disponible todavía.
-        </p>
-      </div>
+      <h1 className="text-xl font-semibold text-brand-900">Roles y permisos</h1>
 
       <div className="overflow-x-auto rounded-lg bg-white p-4 shadow-sm">
         <table className="min-w-full text-left text-sm">

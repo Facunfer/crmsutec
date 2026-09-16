@@ -17,10 +17,7 @@ export default async function VisualizacionPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-xl font-semibold text-brand-900">Visualización</h1>
-        <p className="text-sm text-brand-500">Todo se calcula al momento a partir de los datos actuales — nada acá queda guardado aparte.</p>
-      </div>
+      <h1 className="text-xl font-semibold text-brand-900">Visualización</h1>
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-400">Personas</h2>

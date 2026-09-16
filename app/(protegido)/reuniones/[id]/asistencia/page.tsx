@@ -28,7 +28,6 @@ export default async function AsistenciaPage({ params }: { params: Promise<{ id:
             ← volver a la reunión
           </Link>
           <h1 className="text-xl font-semibold text-brand-900">{meeting.name}</h1>
-          <p className="text-sm text-brand-400">Acreditación y asistencia</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-brand-100 px-3 py-1 text-xs text-brand-700">{STATUS_LABEL[meeting.displayStatus]}</span>

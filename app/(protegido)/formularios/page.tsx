@@ -21,10 +21,7 @@ export default async function FormulariosPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-brand-900">Formularios</h1>
-          <p className="text-sm text-brand-500">Formularios públicos que alimentan la base de Personas.</p>
-        </div>
+        <h1 className="text-xl font-semibold text-brand-900">Formularios</h1>
         {canReview ? (
           <Link
             href="/formularios/revision"

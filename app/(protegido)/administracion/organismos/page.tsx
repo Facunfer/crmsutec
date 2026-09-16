@@ -10,14 +10,7 @@ export default async function OrganismosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-brand-900">Organismos</h1>
-        <p className="text-sm text-brand-500">
-          Catálogo jerárquico de organismos (ministerios, entes autárquicos, poderes, dependencias,
-          etc.). Los tipos son fijos; los organismos concretos se cargan acá — nunca se inventan
-          desde un seed.
-        </p>
-      </div>
+      <h1 className="text-xl font-semibold text-brand-900">Organismos</h1>
 
       <CreateOrganizationForm types={types} organizations={organizations} />
 

@@ -10,14 +10,7 @@ export default async function CamposPersonalizadosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-brand-900">Campos personalizados</h1>
-        <p className="text-sm text-brand-500">
-          Catálogo de campos adicionales para Personas, guardados en <code>people.custom_fields</code>. El
-          constructor de Formularios puede mapear un campo a uno de estos para completar el dato sin
-          duplicar su definición.
-        </p>
-      </div>
+      <h1 className="text-xl font-semibold text-brand-900">Campos personalizados</h1>
 
       <CreateFieldDefinitionForm />
 

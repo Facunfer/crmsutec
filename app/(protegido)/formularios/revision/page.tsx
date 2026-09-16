@@ -9,13 +9,7 @@ export default async function RevisionDuplicadosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-brand-900">Revisión de duplicados</h1>
-        <p className="text-sm text-brand-500">
-          Envíos de formularios que coinciden con alguien que ya está en la base, pero que necesitan que
-          una persona confirme si es la misma o no antes de tocar ningún dato.
-        </p>
-      </div>
+      <h1 className="text-xl font-semibold text-brand-900">Revisión de duplicados</h1>
 
       <div className="space-y-3">
         {candidates.map((c) => (
