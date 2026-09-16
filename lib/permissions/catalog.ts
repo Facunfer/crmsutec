@@ -13,6 +13,7 @@ export const PERMISSIONS = [
   { key: "people.deactivate", description: "Desactivar personas" },
   { key: "people.export", description: "Exportar personas a CSV" },
   { key: "people.view_sensitive", description: "Ver DNI/teléfono/email sin enmascarar" },
+  { key: "people.manage_custom_fields", description: "Definir campos personalizados de personas (usados también por Formularios)" },
 
   { key: "organizations.manage", description: "Administrar el catálogo de organismos (tipos y jerarquía)" },
 

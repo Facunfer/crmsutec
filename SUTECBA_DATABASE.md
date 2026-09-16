@@ -1,6 +1,6 @@
 # Base de datos — CRM SUTECBA
 
-> Etapa 2. Complementa `SUTECBA_ARCHITECTURE.md` (decisiones D1-D16). Este documento describe el esquema real, tal como quedó aplicado por las migraciones en `db/migrations/`.
+> Etapa 2. Complementa `SUTECBA_ARCHITECTURE.md` (decisiones D1-D17). Este documento describe el esquema real, tal como quedó aplicado por las migraciones en `db/migrations/`.
 
 ## 1. Cómo se ejecuta hoy (desarrollo local)
 
@@ -83,7 +83,7 @@ Las tres primeras guardas más el mecanismo de append-only de `audit_logs` y el 
 
 ### Formularios (`0006_forms.sql`)
 
-`forms` (estado, slug único, política de identificación/actualización) + `form_versions` (snapshot inmutable del esquema en cada publicación, para no reinterpretar respuestas viejas) + `form_fields` (edición pre-publicación, con `person_field_mapping` compartido con el registro de campos de Personas) + `form_actions` (acciones post-envío, hoy solo `add_to_association`) + `form_submissions` (`raw_payload` inmutable + `idempotency_key` único) + `person_duplicate_candidates` (bandeja de casos ambiguos, nunca fusión automática).
+`forms` (estado, slug único, política de identificación/actualización) + `form_versions` (snapshot inmutable del esquema en cada publicación, para no reinterpretar respuestas viejas) + `form_fields` (edición pre-publicación, con `person_field_mapping` compartido con el registro de campos de Personas) + `form_actions` (acciones post-envío, hoy solo `add_to_association`) + `form_submissions` (`raw_payload` inmutable + `idempotency_key` único) + `person_duplicate_candidates` (bandeja de casos ambiguos, nunca fusión automática). Implementado en la Etapa 8 (`lib/forms/*`, `/formularios`, `/f/[slug]`) — decisión D17 de `SUTECBA_ARCHITECTURE.md` tiene el detalle de identificación/deduplicación/versionado.
 
 ### Notificaciones y auditoría (`0007_notifications_and_audit.sql`)
 
@@ -108,4 +108,5 @@ Ninguna tabla de trazabilidad tiene `on delete cascade`/`set null` hacia `people
 - No hay una instancia de Postgres real probada todavía (solo PGlite local) — la rama `SUTECBA_DATABASE_URL` de `lib/db/client.ts` está escrita pero sin ejercitar.
 - `unaccent`/`pg_trgm` para búsqueda: extensiones habilitadas, pero el índice de expresión con `unaccent` no funciona en PGlite (ver sección 3, Personas) — búsqueda hoy es `ILIKE` sensible a acentos. Reintentar el índice cuando haya un Postgres real.
 - El detalle de campos "previstos a futuro" en `people` (domicilio, barrio, situación laboral, número de afiliado, etc. — sección 7.2 del prompt) queda modelado vía `custom_fields`/`person_field_definitions` hasta que se decida cuáles son núcleo.
-- Afiliación sindical y cualquier campo que la revele: cuando se cargue, debe pasar por `person_field_definitions.sensitive=true` y el permiso `people.view_sensitive` — no hay todavía UI para cargarlo (Etapa 4/9), y la recomendación de validación legal queda para `docs/datos-personales.md` (Etapa 19).
+- Afiliación sindical y cualquier campo que la revele: cuando se cargue, debe pasar por `person_field_definitions.sensitive=true` y el permiso `people.view_sensitive` — la recomendación de validación legal queda para `docs/datos-personales.md` (Etapa 19).
+- **Actualización Etapa 8**: `person_field_definitions` ya tiene administración real (`/administracion/campos-personalizados`, permiso `people.manage_custom_fields`) y `people.custom_fields` ya se escribe de verdad — pero solo desde un envío de Formulario (`lib/forms/apply.ts`). La ficha de Personas y el alta manual todavía no leen ni editan `custom_fields` directamente; sigue pendiente.
