@@ -8,34 +8,58 @@ import type { Database } from "./schema.js";
 
 assertServerOnly("lib/db/client.ts");
 
-let kyselyInstance: Kysely<Database> | null = null;
-let pgliteHandle: KyselyPGlite | null = null;
+/**
+ * Next.js compila el código de servidor en varias "capas" separadas (RSC,
+ * SSR, Server Actions, middleware), cada una con su propio grafo de
+ * módulos: un `let` a nivel de módulo NO es un singleton real ahí, cada
+ * capa termina abriendo su propia instancia. Con PGlite (motor embebido,
+ * no un servidor de red) eso es grave: dos instancias abiertas contra el
+ * mismo directorio no se sincronizan entre sí y los datos escritos por una
+ * quedan invisibles para la otra. `globalThis` sí es compartido entre
+ * capas dentro del mismo proceso de Node, así que el cache va ahí.
+ */
+interface SutecbaDbGlobal {
+  __sutecbaDbConnection?: Promise<{
+    kysely: Kysely<Database>;
+    pglite: KyselyPGlite | null;
+  }>;
+}
 
-async function buildDialect(): Promise<Dialect> {
+const globalForDb = globalThis as unknown as SutecbaDbGlobal;
+
+async function buildConnection(): Promise<{
+  kysely: Kysely<Database>;
+  pglite: KyselyPGlite | null;
+}> {
   const env = loadEnv();
 
   if (env.SUTECBA_DATABASE_URL) {
     // Postgres real (staging/producción, o un local que el usuario levantó
-    // por su cuenta). No probado en Etapa 2 por falta de instancia; el
+    // por su cuenta). No probado en Etapa 2/3 por falta de instancia; el
     // contrato de lib/db es el mismo para ambos casos (decisión D2).
-    return new PostgresDialect({
+    const dialect: Dialect = new PostgresDialect({
       pool: new Pool({ connectionString: env.SUTECBA_DATABASE_URL }),
     });
+    return { kysely: new Kysely<Database>({ dialect }), pglite: null };
   }
 
   const dataDir = resolvePgliteDataDir(env);
   mkdirSync(dataDir, { recursive: true });
-  pgliteHandle = await KyselyPGlite.create(dataDir);
-  return pgliteHandle.dialect;
+  const pglite = await KyselyPGlite.create(dataDir);
+  return { kysely: new Kysely<Database>({ dialect: pglite.dialect }), pglite };
+}
+
+function connection() {
+  if (!globalForDb.__sutecbaDbConnection) {
+    globalForDb.__sutecbaDbConnection = buildConnection();
+  }
+  return globalForDb.__sutecbaDbConnection;
 }
 
 /** Único punto de acceso a la base. Todo lo demás importa esto, nunca `pg`/PGlite directo. */
 export async function getDb(): Promise<Kysely<Database>> {
-  if (!kyselyInstance) {
-    const dialect = await buildDialect();
-    kyselyInstance = new Kysely<Database>({ dialect });
-  }
-  return kyselyInstance;
+  const { kysely } = await connection();
+  return kysely;
 }
 
 /**
@@ -46,10 +70,10 @@ export async function getDb(): Promise<Kysely<Database>> {
  */
 export async function execRawSql(sqlText: string): Promise<void> {
   const env = loadEnv();
-  await getDb();
+  const { pglite } = await connection();
 
-  if (pgliteHandle) {
-    await pgliteHandle.client.exec(sqlText);
+  if (pglite) {
+    await pglite.client.exec(sqlText);
     return;
   }
 
@@ -67,9 +91,9 @@ export async function execRawSql(sqlText: string): Promise<void> {
 }
 
 export async function closeDb(): Promise<void> {
-  if (kyselyInstance) {
-    await kyselyInstance.destroy();
-    kyselyInstance = null;
-    pgliteHandle = null;
+  if (globalForDb.__sutecbaDbConnection) {
+    const { kysely } = await globalForDb.__sutecbaDbConnection;
+    await kysely.destroy();
+    globalForDb.__sutecbaDbConnection = undefined;
   }
 }

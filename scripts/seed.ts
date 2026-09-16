@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { closeDb, getDb } from "../lib/db/client.js";
 import { loadEnv, resolvePgliteDataDir } from "../lib/db/env.js";
 import {
@@ -8,11 +9,8 @@ import {
   GuardViolationError,
 } from "../lib/db/guards.js";
 import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../lib/permissions/catalog.js";
+import { toJsonb } from "../lib/db/json.js";
 import type { Json } from "../lib/db/schema.js";
-
-function toJsonb(value: Json): string {
-  return JSON.stringify(value);
-}
 
 /** Configuración por defecto; solo se inserta si la clave todavía no existe. */
 const DEFAULT_SETTINGS: Array<{ key: string; value: Json }> = [
@@ -23,7 +21,8 @@ const DEFAULT_SETTINGS: Array<{ key: string; value: Json }> = [
   { key: "invitation_response_editable_until_meeting_start", value: true },
 ];
 
-async function main() {
+/** Reutilizable desde el CLI y desde tests de integración. No cierra la conexión. */
+export async function runSeed(): Promise<void> {
   const env = loadEnv();
   const pgliteDataDir = resolvePgliteDataDir(env);
   console.log(`[seed] destino: ${describeTarget(env, pgliteDataDir)}`);
@@ -107,14 +106,21 @@ async function main() {
       `${DEFAULT_SETTINGS.length} configuraciones por defecto (sin sobreescribir existentes). ` +
       `Sin personas de ejemplo.`
   );
+}
+
+async function main() {
+  await runSeed();
   await closeDb();
 }
 
-main().catch((err) => {
-  if (err instanceof GuardViolationError) {
-    console.error(`[seed] ABORTADO por guarda: ${err.message}`);
-  } else {
-    console.error("[seed] error:", err);
-  }
-  process.exitCode = 1;
-});
+const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  main().catch((err) => {
+    if (err instanceof GuardViolationError) {
+      console.error(`[seed] ABORTADO por guarda: ${err.message}`);
+    } else {
+      console.error("[seed] error:", err);
+    }
+    process.exitCode = 1;
+  });
+}

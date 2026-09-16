@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "start": "next start -p 3100",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:test": "SUTECBA_ENV=test tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed.ts",
@@ -15,14 +18,24 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "bcryptjs": "^3.0.3",
+    "clsx": "^2.1.1",
     "kysely": "^0.28.17",
     "kysely-pglite": "^0.6.1",
+    "next": "^15.5.22",
     "pg": "^8.23.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.14",
     "tsx": "^4.23.1",
     "typescript": "^5.5.4",
     "vitest": "^3.2.4"
