@@ -71,12 +71,13 @@ Las tres primeras guardas más el mecanismo de append-only de `audit_logs` y el 
 
 `association_types` (catálogo configurable: delegados, comisiones, agrupaciones, etc. — sección 4 del prompt) + `associations` + `association_managers` (responsables, usuario o persona) + `people_associations` (N:M con historial: único índice parcial por `(person_id, association_id) where status='active'`, permite ver altas/bajas pasadas sin perder el registro — R8).
 
-### Reuniones (`0005_meetings.sql`)
+### Reuniones (`0005_meetings.sql`, ampliada en `0011_meeting_invitations_withdraw.sql` — Etapa 6)
 
-- `meetings`: estado (`draft/scheduled/in_progress/finished/cancelled/overdue_unclosed`), configuración de QR (`qr_mode`, `qr_secret_version`, tolerancias de check-in) ya prevista desde el modelo de datos aunque la lógica se implemente en la Etapa 7.
+- `meetings`: estado (`draft/scheduled/in_progress/finished/cancelled/overdue_unclosed`), configuración de QR (`qr_mode`, `qr_secret_version`, tolerancias de check-in) ya prevista desde el modelo de datos aunque la lógica se implemente en la Etapa 7. `overdue_unclosed` **nunca se escribe**: se calcula al leer (`lib/meetings/state-machine.ts#isOverdueUnclosed`) para una reunión `scheduled`/`in_progress` cuya `ends_at` ya pasó — así se cumple "no se finaliza sola" sin necesitar un job.
 - `meeting_invitation_batches`: guarda los criterios de audiencia usados (JSON), para poder explicar después "por qué esta persona fue invitada".
-- `meeting_invitations`: **dos dimensiones** (D9) — `response_status` (pending/confirmed/declined) y `attendance_status` (unknown/attended/absent). `token_hash` único, nunca el token en claro (D10). `unique (meeting_id, person_id)`: re-invitar es idempotente.
+- `meeting_invitations`: **dos dimensiones** (D9) — `response_status` (pending/confirmed/declined) y `attendance_status` (unknown/attended/absent). `token_hash` único, nunca el token en claro (D10). `unique (meeting_id, person_id)`: re-invitar es idempotente. `withdrawn_at`/`withdrawn_by` (Etapa 6): "quitar invitado" nunca borra la fila (R8) — la marca, y si se vuelve a invitar a la misma persona más tarde, se revive la misma fila con un token nuevo en vez de violar el UNIQUE.
 - `meeting_attendance`: `unique (meeting_id, person_id)` evita duplicados de check-in a nivel base, no solo en código; `method` distingue token/DNI/email/teléfono/manual.
+- `public_link_attempts` (`0010_public_link_attempts.sql`): rate limit genérico por `scope` (`invitation_view`, `invitation_respond`, y `checkin` en la Etapa 7) + identificador + IP, en tabla y no en memoria (D4/D13), reutilizado por `lib/security/public-rate-limit.ts`.
 
 ### Formularios (`0006_forms.sql`)
 

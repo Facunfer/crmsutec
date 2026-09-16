@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
@@ -73,14 +74,14 @@ export default async function AsociacionFichaPage({ params }: { params: Promise<
               : "asistencia promedio: sin datos todavía (Etapa 6)"}
           </span>
         </div>
-        <button
-          type="button"
-          disabled
-          title="No disponible todavía"
-          className="mt-3 cursor-not-allowed rounded-md border border-brand-200 px-3 py-1.5 text-sm text-brand-300"
-        >
-          Convocar a reunión (pronto)
-        </button>
+        {can(actor, "meetings.create") ? (
+          <Link
+            href={`/reuniones?associationId=${id}`}
+            className="mt-3 inline-block rounded-md border border-brand-200 px-3 py-1.5 text-sm text-brand-700 hover:bg-brand-50"
+          >
+            Convocar a reunión
+          </Link>
+        ) : null}
       </section>
 
       <ManagersSection associationId={id} managers={managers} users={users} canManage={canManageMembers} />

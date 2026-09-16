@@ -70,6 +70,15 @@ export interface LoginAttemptsTable {
   created_at: Generated<Date>;
 }
 
+export interface PublicLinkAttemptsTable {
+  id: Generated<string>;
+  scope: string;
+  identifier: string;
+  ip_address: string;
+  succeeded: boolean;
+  created_at: Generated<Date>;
+}
+
 export interface OrganizationTypesTable {
   id: Generated<string>;
   key: string;
@@ -235,6 +244,8 @@ export interface MeetingInvitationsTable {
   channel: Generated<string>;
   invited_at: Generated<Date>;
   responded_at: Date | null;
+  withdrawn_at: Date | null;
+  withdrawn_by: string | null;
 }
 
 export interface MeetingAttendanceTable {
@@ -378,6 +389,7 @@ export interface Database {
   users: UsersTable;
   sessions: SessionsTable;
   login_attempts: LoginAttemptsTable;
+  public_link_attempts: PublicLinkAttemptsTable;
   organization_types: OrganizationTypesTable;
   organizations: OrganizationsTable;
   people: PeopleTable;

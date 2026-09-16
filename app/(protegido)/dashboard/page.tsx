@@ -17,6 +17,21 @@ export default async function DashboardPage() {
     .selectFrom("associations")
     .select(({ fn }) => fn.count<number>("id").as("count"))
     .executeTakeFirstOrThrow();
+  const { count: meetingCount } = await db
+    .selectFrom("meetings")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .executeTakeFirstOrThrow();
+  const { count: invitedCount } = await db
+    .selectFrom("meeting_invitations")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .where("withdrawn_at", "is", null)
+    .executeTakeFirstOrThrow();
+  const { count: confirmedCount } = await db
+    .selectFrom("meeting_invitations")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .where("withdrawn_at", "is", null)
+    .where("response_status", "=", "confirmed")
+    .executeTakeFirstOrThrow();
 
   return (
     <div>
@@ -34,10 +49,22 @@ export default async function DashboardPage() {
           <div className="text-2xl font-semibold text-brand-700">{associationCount}</div>
           <div className="text-sm text-brand-500">Asociaciones</div>
         </div>
+        <div className="rounded-lg bg-white p-4 shadow-sm">
+          <div className="text-2xl font-semibold text-brand-700">{meetingCount}</div>
+          <div className="text-sm text-brand-500">Reuniones</div>
+        </div>
+        <div className="rounded-lg bg-white p-4 shadow-sm">
+          <div className="text-2xl font-semibold text-brand-700">{invitedCount}</div>
+          <div className="text-sm text-brand-500">Invitaciones vigentes</div>
+        </div>
+        <div className="rounded-lg bg-white p-4 shadow-sm">
+          <div className="text-2xl font-semibold text-brand-700">{confirmedCount}</div>
+          <div className="text-sm text-brand-500">Confirmaciones</div>
+        </div>
       </div>
       <p className="mt-8 text-sm text-brand-400">
-        Reuniones, Formularios y Visualización todavía no están disponibles — se construyen en
-        las próximas etapas.
+        Formularios y Visualización todavía no están disponibles — se construyen en las próximas
+        etapas.
       </p>
     </div>
   );
