@@ -26,6 +26,7 @@
     "libphonenumber-js": "^1.13.13",
     "next": "^15.5.22",
     "pg": "^8.23.0",
+    "qrcode.react": "^4.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.7.0",

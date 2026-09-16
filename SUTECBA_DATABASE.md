@@ -28,6 +28,8 @@ Para apuntar a un Postgres real (staging/producción, o un local que el usuario 
 > npm run create-admin -- --email=... --name="..."
 > ```
 
+> **Concurrencia real dentro de un mismo proceso (Etapa 7)**: `kysely-pglite` comparte una única sesión de PGlite entre todas las "conexiones" que entrega Kysely, así que dos `db.transaction().execute()` en vuelo al mismo tiempo (por ejemplo, dos check-ins casi simultáneos) podían intercalar su `BEGIN`/`COMMIT` y corromper el estado de transacción del otro. `lib/db/client.ts` serializa las transacciones con un mutex propio cuando el backend es PGlite (no hace falta ni se aplica contra Postgres real vía `pg.Pool`, donde cada conexión ya es independiente). Detalle completo, con el error real reproducido, en el addendum de la Etapa 7 de `SUTECBA_ARCHITECTURE.md` (sección D2).
+
 ## 2. Guardas del runner (`lib/db/guards.ts`, `scripts/migrate.ts`, `scripts/seed.ts`)
 
 Se ejecutan siempre, antes de tocar cualquier tabla:
@@ -77,7 +79,7 @@ Las tres primeras guardas más el mecanismo de append-only de `audit_logs` y el 
 - `meeting_invitation_batches`: guarda los criterios de audiencia usados (JSON), para poder explicar después "por qué esta persona fue invitada".
 - `meeting_invitations`: **dos dimensiones** (D9) — `response_status` (pending/confirmed/declined) y `attendance_status` (unknown/attended/absent). `token_hash` único, nunca el token en claro (D10). `unique (meeting_id, person_id)`: re-invitar es idempotente. `withdrawn_at`/`withdrawn_by` (Etapa 6): "quitar invitado" nunca borra la fila (R8) — la marca, y si se vuelve a invitar a la misma persona más tarde, se revive la misma fila con un token nuevo en vez de violar el UNIQUE.
 - `meeting_attendance`: `unique (meeting_id, person_id)` evita duplicados de check-in a nivel base, no solo en código; `method` distingue token/DNI/email/teléfono/manual.
-- `public_link_attempts` (`0010_public_link_attempts.sql`): rate limit genérico por `scope` (`invitation_view`, `invitation_respond`, y `checkin` en la Etapa 7) + identificador + IP, en tabla y no en memoria (D4/D13), reutilizado por `lib/security/public-rate-limit.ts`.
+- `public_link_attempts` (`0010_public_link_attempts.sql`): rate limit genérico por `scope` (`invitation_view`, `invitation_respond`, y desde la Etapa 7 también `checkin_qr`, `checkin_identify`, `checkin_confirm`, `invitation_checkin`) + identificador + IP, en tabla y no en memoria (D4/D13), reutilizado por `lib/security/public-rate-limit.ts`.
 
 ### Formularios (`0006_forms.sql`)
 

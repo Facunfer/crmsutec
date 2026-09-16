@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { getInvitationByToken } from "@/lib/meetings/public";
 import { ResponseButtons } from "./ResponseButtons";
+import { CheckinButton } from "./CheckinButton";
 
 export const metadata = { robots: "noindex, nofollow" };
 
@@ -17,7 +18,6 @@ const MESSAGES: Record<string, string> = {
   rate_limited: "Demasiados intentos desde este lugar. Probá de nuevo en unos minutos.",
   cancelled: "Esta reunión fue cancelada.",
   finished: "Esta reunión ya terminó.",
-  locked: "Esta reunión ya empezó, así que no se puede cambiar la respuesta.",
 };
 
 export default async function InvitacionPublicaPage({ params }: { params: Promise<{ token: string }> }) {
@@ -53,6 +53,12 @@ export default async function InvitacionPublicaPage({ params }: { params: Promis
               ) : null}
             </dl>
             <ResponseButtons token={token} currentResponse={view.responseStatus} />
+          </>
+        ) : view.kind === "checkin" ? (
+          <>
+            <h1 className="mb-1 text-lg font-semibold text-brand-900">{view.meetingName}</h1>
+            <p className="mb-4 text-sm text-brand-500">Hola {view.firstName}, esta reunión ya empezó.</p>
+            <CheckinButton token={token} alreadyCheckedIn={view.alreadyCheckedIn} checkedInAt={view.checkedInAt?.toISOString() ?? null} />
           </>
         ) : (
           <p className="text-center text-sm text-brand-700">{MESSAGES[view.kind] ?? "No pudimos mostrar esta invitación."}</p>

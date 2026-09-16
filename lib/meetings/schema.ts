@@ -10,6 +10,10 @@ export const meetingInputSchema = z
     locationName: z.string().trim().optional().or(z.literal("")),
     address: z.string().trim().optional().or(z.literal("")),
     notes: z.string().trim().optional().or(z.literal("")),
+    qrMode: z.enum(["static", "rotating"]).optional(),
+    checkinToleranceBeforeMinutes: z.coerce.number().int().min(0).max(240).optional(),
+    checkinToleranceAfterMinutes: z.coerce.number().int().min(0).max(240).optional(),
+    allowUninvitedCheckin: z.coerce.boolean().optional(),
   })
   .refine(
     (data) => parseLocalDateTimeInBusinessTz(data.endsAt) > parseLocalDateTimeInBusinessTz(data.startsAt),
@@ -30,5 +34,13 @@ export function parseMeetingForm(formData: FormData): MeetingInput {
     locationName: String(formData.get("locationName") ?? ""),
     address: String(formData.get("address") ?? ""),
     notes: String(formData.get("notes") ?? ""),
+    qrMode: formData.has("qrMode") ? String(formData.get("qrMode")) : undefined,
+    checkinToleranceBeforeMinutes: formData.has("checkinToleranceBeforeMinutes")
+      ? String(formData.get("checkinToleranceBeforeMinutes"))
+      : undefined,
+    checkinToleranceAfterMinutes: formData.has("checkinToleranceAfterMinutes")
+      ? String(formData.get("checkinToleranceAfterMinutes"))
+      : undefined,
+    allowUninvitedCheckin: formData.has("allowUninvitedCheckin") ? formData.get("allowUninvitedCheckin") === "true" : undefined,
   });
 }

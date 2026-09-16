@@ -27,6 +27,10 @@ export async function createMeeting(actor: SessionUser, input: MeetingInput): Pr
       notes: input.notes?.trim() || null,
       organizer_user_id: actor.id,
       status: "draft",
+      qr_mode: input.qrMode ?? "rotating",
+      checkin_tolerance_before_minutes: input.checkinToleranceBeforeMinutes ?? 30,
+      checkin_tolerance_after_minutes: input.checkinToleranceAfterMinutes ?? 60,
+      allow_uninvited_checkin: input.allowUninvitedCheckin ?? false,
       created_by: actor.id,
     })
     .returning("id")
@@ -65,6 +69,10 @@ export async function updateMeeting(actor: SessionUser, meetingId: string, input
       location_name: input.locationName?.trim() || null,
       address: input.address?.trim() || null,
       notes: input.notes?.trim() || null,
+      qr_mode: input.qrMode ?? existing.qr_mode,
+      checkin_tolerance_before_minutes: input.checkinToleranceBeforeMinutes ?? existing.checkin_tolerance_before_minutes,
+      checkin_tolerance_after_minutes: input.checkinToleranceAfterMinutes ?? existing.checkin_tolerance_after_minutes,
+      allow_uninvited_checkin: input.allowUninvitedCheckin ?? existing.allow_uninvited_checkin,
       updated_at: new Date(),
     })
     .where("id", "=", meetingId)
@@ -119,6 +127,28 @@ export async function changeMeetingStatus(
     entityId: meetingId,
     before: { status: existing.status },
     after: { status: targetStatus },
+  });
+}
+
+/** Invalida todos los QR ya emitidos (sección 12.1): el secreto real se deriva de este número + el id de la reunión. */
+export async function regenerateQrSecret(actor: SessionUser, meetingId: string): Promise<void> {
+  assertPermission(actor, "meetings.change_status");
+
+  const db = await getDb();
+  const updated = await db
+    .updateTable("meetings")
+    .set((eb) => ({ qr_secret_version: eb("qr_secret_version", "+", 1) }))
+    .where("id", "=", meetingId)
+    .returning("qr_secret_version")
+    .executeTakeFirst();
+  if (!updated) throw new MeetingCommandError("La reunión no existe.");
+
+  await writeAuditLog({
+    actorUserId: actor.id,
+    action: "QR_SECRET_ROTATED",
+    entityType: "meeting",
+    entityId: meetingId,
+    after: { qr_secret_version: updated.qr_secret_version },
   });
 }
 

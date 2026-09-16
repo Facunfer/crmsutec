@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { getMeetingAssociationIds, getMeetingById } from "@/lib/meetings/queries";
@@ -51,6 +52,11 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-brand-100 px-3 py-1 text-xs text-brand-700">{STATUS_LABEL[meeting.displayStatus]}</span>
+          {meeting.status !== "draft" ? (
+            <Link href={`/reuniones/${id}/asistencia`} className="rounded-md border border-brand-200 px-3 py-1.5 text-sm text-brand-700 hover:bg-brand-50">
+              QR y asistencia
+            </Link>
+          ) : null}
           <StatusActions meetingId={id} availableTransitions={availableTransitions} />
         </div>
       </div>

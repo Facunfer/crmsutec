@@ -5,6 +5,8 @@ import { requireUser } from "@/lib/auth/guard";
 import { countAudience, type MeetingAudienceSpec } from "@/lib/meetings/audience";
 import { createInvitationBatch, MeetingInvitationError, withdrawInvitation, type CreateInvitationBatchResult } from "@/lib/meetings/invitations";
 import { searchAnyActivePeople } from "@/lib/associations/queries";
+import { regenerateQrSecret, MeetingCommandError } from "@/lib/meetings/commands";
+import { setAttendanceManually, ManualAttendanceError } from "@/lib/attendance/manual";
 
 export interface SimpleResult {
   ok: boolean;
@@ -47,4 +49,32 @@ export async function searchPersonForInvitationAction(search: string): Promise<{
   if (search.trim().length < 2) return { results: [] };
   const results = await searchAnyActivePeople(search);
   return { results };
+}
+
+export async function regenerateQrSecretAction(meetingId: string): Promise<SimpleResult> {
+  const actor = await requireUser();
+  try {
+    await regenerateQrSecret(actor, meetingId);
+    revalidatePath(`/reuniones/${meetingId}/asistencia`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof MeetingCommandError ? err.message : "No se pudo regenerar el código QR." };
+  }
+}
+
+export async function setAttendanceManuallyAction(
+  meetingId: string,
+  personId: string,
+  attendanceStatus: "attended" | "absent",
+  reason: string
+): Promise<SimpleResult> {
+  const actor = await requireUser();
+  try {
+    await setAttendanceManually(actor, meetingId, personId, attendanceStatus, reason);
+    revalidatePath(`/reuniones/${meetingId}`);
+    revalidatePath(`/reuniones/${meetingId}/asistencia`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof ManualAttendanceError ? err.message : "No se pudo corregir la asistencia." };
+  }
 }
