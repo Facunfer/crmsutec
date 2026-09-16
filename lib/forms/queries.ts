@@ -216,7 +216,13 @@ export interface DuplicateCandidateRow {
   createdAt: Date;
 }
 
-export async function listPendingDuplicateCandidates(): Promise<DuplicateCandidateRow[]> {
+/**
+ * El payload de un envío suele traer DNI/email/teléfono en claro — sin
+ * `people.view_sensitive` no se lo manda al cliente (`canSeeSensitive`),
+ * mismo criterio que el resto de la app: enmascarar es cosa del servidor,
+ * nunca del componente (hallazgo real de la Etapa 10).
+ */
+export async function listPendingDuplicateCandidates(canSeeSensitive: boolean): Promise<DuplicateCandidateRow[]> {
   const db = await getDb();
   const rows = await db
     .selectFrom("person_duplicate_candidates")
@@ -249,7 +255,7 @@ export async function listPendingDuplicateCandidates(): Promise<DuplicateCandida
     formName: r.form_name,
     matchReason: r.match_reason,
     status: r.status,
-    rawPayload: (r.raw_payload ?? null) as Record<string, unknown> | null,
+    rawPayload: canSeeSensitive ? ((r.raw_payload ?? null) as Record<string, unknown> | null) : null,
     createdAt: r.created_at,
   }));
 }

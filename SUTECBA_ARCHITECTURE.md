@@ -133,12 +133,13 @@ sutecba/
 
 Entidades principales: `users`, `roles`, `permissions`, `role_permissions`, `sessions`, `people`, `person_field_definitions`, `organization_types`, `organizations`, `association_types`, `associations`, `people_associations`, `meetings`, `meeting_invitation_batches`, `meeting_invitations`, `meeting_attendance`, `forms`, `form_fields`, `form_submissions`, `person_duplicate_candidates`, `notification_outbox`, `audit_logs`, `app_settings`, `sutecba_meta`.
 
-## 6. Seguridad (resumen — checklist completo en Etapa 10)
+## 6. Seguridad (resumen — checklist completo en `SUTECBA_SEGURIDAD.md`, Etapa 10)
 
 - Ninguna variable con `NEXT_PUBLIC_` para datos de base o secretos.
 - Único módulo `lib/db/client.ts` con `assertServerOnly()`.
-- Tres capas de permisos: menú, página/layout, acción.
-- RLS habilitado igual como defensa en profundidad aunque el acceso normal sea por conexión directa server-only con credencial propia (ver D2 y D5) — evita que una fuga de credencial de solo-lectura exponga todo.
+- Tres capas de permisos: menú, página/layout, acción — auditadas exhaustivamente en la Etapa 10 (los 19 `page.tsx` protegidos gatean correctamente).
+- Enmascarado de datos sensibles (`people.view_sensitive`): la Etapa 10 encontró y corrigió tres superficies (edición de Personas, búsqueda para sumar miembro, bandeja de duplicados de Formularios) donde llegaba sin enmascarar a un rol sin el permiso — ver `SUTECBA_SEGURIDAD.md` §5.
+- RLS: evaluado en la Etapa 10 y **no implementado a propósito** — con una sola credencial de aplicación (D2) no protege nada real sin un segundo rol de solo lectura que hoy no tiene ningún consumidor; ver `SUTECBA_SEGURIDAD.md` §10 para el razonamiento completo (reemplaza la intención original de este resumen).
 - Tokens públicos: hash en base, nunca el valor en claro (ver D10).
 - Zona horaria única (`SUTECBA_TZ`), ver D15.
 

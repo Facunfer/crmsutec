@@ -1,10 +1,11 @@
 import { requirePermission } from "@/lib/auth/guard";
+import { can } from "@/lib/permissions/can";
 import { listPendingDuplicateCandidates } from "@/lib/forms/queries";
 import { CandidateRow } from "./CandidateRow";
 
 export default async function RevisionDuplicadosPage() {
-  await requirePermission("forms.review_duplicates");
-  const candidates = await listPendingDuplicateCandidates();
+  const actor = await requirePermission("forms.review_duplicates");
+  const candidates = await listPendingDuplicateCandidates(can(actor, "people.view_sensitive"));
 
   return (
     <div className="space-y-6">

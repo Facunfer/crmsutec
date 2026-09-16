@@ -1,5 +1,6 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
+import { maskDni } from "../people/masking.js";
 
 assertServerOnly("lib/associations/queries.ts");
 
@@ -230,10 +231,16 @@ export async function searchAnyActivePeople(
   return rows.map((r) => ({ id: r.id, firstName: r.first_name, lastName: r.last_name }));
 }
 
-/** Buscador de personas para agregar como miembro; excluye a quienes ya están activos (sección 10 del prompt). */
+/**
+ * Buscador de personas para agregar como miembro; excluye a quienes ya
+ * están activos (sección 10 del prompt). El DNI es solo para desambiguar
+ * homónimos — igual que en Personas, sin `people.view_sensitive` se
+ * enmascara acá mismo, nunca le llega el valor real al cliente.
+ */
 export async function searchPeopleToAdd(
   associationId: string,
   search: string,
+  canSeeSensitive: boolean,
   limit = 20
 ): Promise<Array<{ id: string; firstName: string; lastName: string; dni: string | null }>> {
   const db = await getDb();
@@ -268,5 +275,5 @@ export async function searchPeopleToAdd(
     .limit(limit)
     .execute();
 
-  return rows.map((r) => ({ id: r.id, firstName: r.first_name, lastName: r.last_name, dni: r.dni }));
+  return rows.map((r) => ({ id: r.id, firstName: r.first_name, lastName: r.last_name, dni: canSeeSensitive ? r.dni : maskDni(r.dni) }));
 }

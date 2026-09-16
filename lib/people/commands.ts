@@ -3,7 +3,7 @@ import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import { writeAuditLog } from "../audit/log.js";
 import { toJsonb } from "../db/json.js";
-import type { SessionUser } from "../permissions/can.js";
+import { can, type SessionUser } from "../permissions/can.js";
 import { normalizeDni, normalizeEmail, normalizePhone } from "./normalize.js";
 import type { PersonInput } from "./schema.js";
 
@@ -194,6 +194,17 @@ export async function updatePerson(
   }
 
   const normalized = normalizePersonInput(input);
+
+  // Quien no tiene people.view_sensitive tampoco puede escribir estos campos
+  // a ciegas: la UI ya los deshabilita/enmascara (PersonForm), pero esto es
+  // lo que realmente lo garantiza — nunca confiar en que el cliente no
+  // manda un DNI/email/teléfono real igual saltándose el formulario.
+  if (!can(actor, "people.view_sensitive")) {
+    normalized.dni = existing.dni;
+    normalized.email = existing.email;
+    normalized.phone = existing.phone;
+  }
+
   const { dniBlockedBy, warnings } = await findDuplicates(normalized, personId);
 
   if (dniBlockedBy) {

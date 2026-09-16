@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth/guard";
+import { can } from "@/lib/permissions/can";
 import { addManager, addMember, AssociationMemberError, removeManager, removeMember } from "@/lib/associations/members";
 import { searchAnyActivePeople, searchPeopleToAdd } from "@/lib/associations/queries";
 
@@ -24,12 +25,12 @@ export async function searchMemberCandidatesAction(
   _prev: SearchResult,
   formData: FormData
 ): Promise<SearchResult> {
-  await requireUser();
+  const actor = await requireUser();
   const term = String(formData.get("search") ?? "");
   if (term.trim().length < 2) {
     return { results: [], error: "Escribí al menos 2 caracteres para buscar." };
   }
-  const results = await searchPeopleToAdd(associationId, term);
+  const results = await searchPeopleToAdd(associationId, term, can(actor, "people.view_sensitive"));
   return { results };
 }
 

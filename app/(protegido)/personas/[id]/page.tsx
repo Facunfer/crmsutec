@@ -58,9 +58,12 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const initialValues: PersonFormInitialValues = {
     firstName: person.firstName,
     lastName: person.lastName,
-    dni: person.dni ?? "",
-    email: person.email ?? "",
-    phone: person.phone ?? "",
+    // Sin people.view_sensitive, ni el formulario de edición muestra el
+    // valor real — el servidor además ignora estos campos si se los
+    // manda igual (ver updatePerson en lib/people/commands.ts).
+    dni: masked.dni ?? "",
+    email: masked.email ?? "",
+    phone: masked.phone ?? "",
     organizationId: person.organizationId ?? "",
     birthDate: person.birthDate ? person.birthDate.toISOString().slice(0, 10) : "",
     declaredAge: person.declaredAge !== null ? String(person.declaredAge) : "",
@@ -88,7 +91,7 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos personales e información organizacional</h2>
         {can(actor, "people.edit") ? (
-          <PersonForm action={boundUpdateAction} organizations={organizations} initialValues={initialValues} />
+          <PersonForm action={boundUpdateAction} organizations={organizations} initialValues={initialValues} canEditSensitive={canSeeSensitive} />
         ) : (
           <dl className="grid grid-cols-2 gap-2 text-sm">
             <dt className="text-brand-400">DNI</dt>

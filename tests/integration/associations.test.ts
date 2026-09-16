@@ -165,18 +165,31 @@ describe("alta masiva desde una selección/filtro de Personas (sección 10)", ()
     const { id: associationId } = await createAssociation(actor, { name: "Comisión Búsqueda", typeId });
     const p1 = await makePerson(db, "Zulema", "32000020");
 
-    const before = await searchPeopleToAdd(associationId, "Zulema");
+    const before = await searchPeopleToAdd(associationId, "Zulema", true);
     expect(before.map((r) => r.id)).toContain(p1);
 
     await addMember(actor, associationId, p1);
-    const after = await searchPeopleToAdd(associationId, "Zulema");
+    const after = await searchPeopleToAdd(associationId, "Zulema", true);
     expect(after.map((r) => r.id)).not.toContain(p1);
   });
 
   it("searchPeopleToAdd exige al menos 2 caracteres", async () => {
     const { id: associationId } = await createAssociation(actor, { name: "Comisión Mínimo", typeId });
-    const results = await searchPeopleToAdd(associationId, "a");
+    const results = await searchPeopleToAdd(associationId, "a", true);
     expect(results).toEqual([]);
+  });
+
+  it("searchPeopleToAdd enmascara el DNI sin people.view_sensitive (hallazgo real de la Etapa 10)", async () => {
+    const db = await getDb();
+    const { id: associationId } = await createAssociation(actor, { name: "Comisión Enmascarado", typeId });
+    await makePerson(db, "Wanda", "32000099");
+
+    const withPermission = await searchPeopleToAdd(associationId, "Wanda", true);
+    expect(withPermission[0]?.dni).toBe("32000099");
+
+    const withoutPermission = await searchPeopleToAdd(associationId, "Wanda", false);
+    expect(withoutPermission[0]?.dni).not.toBe("32000099");
+    expect(withoutPermission[0]?.dni).toContain("*");
   });
 });
 

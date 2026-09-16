@@ -21,6 +21,7 @@ const {
 } = await import("../../lib/forms/commands.js");
 const { getPublicForm, submitForm } = await import("../../lib/forms/submit.js");
 const { linkDuplicateCandidate, createNewFromCandidate, discardDuplicateCandidate } = await import("../../lib/forms/duplicates.js");
+const { listPendingDuplicateCandidates } = await import("../../lib/forms/queries.js");
 const { createAssociation } = await import("../../lib/associations/commands.js");
 const { createFieldDefinition } = await import("../../lib/people/field-definitions.js");
 
@@ -292,6 +293,23 @@ describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a 
 
     const discarded = await db.selectFrom("person_duplicate_candidates").select("status").where("id", "=", candidate.id).executeTakeFirstOrThrow();
     expect(discarded.status).toBe("discarded");
+  });
+
+  it("sin people.view_sensitive, la bandeja de revisión no trae el payload crudo del envío (hallazgo real de la Etapa 10)", async () => {
+    const id = await makeBasicForm("Formulario Revision Payload", "form-revision-payload", { updatePolicy: "always_flag_for_review" });
+    await publishForm(actor, id);
+
+    await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "sensible@example.com" }), randomUUID(), nextIp(), "agent");
+    await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "otro-sensible@example.com" }), randomUUID(), nextIp(), "agent");
+
+    const withPermission = await listPendingDuplicateCandidates(true);
+    const withoutPermission = await listPendingDuplicateCandidates(false);
+
+    const candidateWith = withPermission.find((c) => c.matchReason.includes("dni"));
+    const candidateWithout = withoutPermission.find((c) => c.matchReason.includes("dni"));
+
+    expect(candidateWith?.rawPayload).not.toBeNull();
+    expect(candidateWithout?.rawPayload).toBeNull();
   });
 });
 

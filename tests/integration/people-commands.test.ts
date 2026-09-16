@@ -169,6 +169,79 @@ describe("bloqueo optimista (sección 9 del prompt)", () => {
   });
 });
 
+describe("sin people.view_sensitive, updatePerson ignora DNI/email/teléfono (hallazgo real de la Etapa 10)", () => {
+  function actorWithoutSensitive(id: string) {
+    const withoutViewSensitive = new Set([...ALL_PERMISSIONS].filter((k) => k !== "people.view_sensitive"));
+    return { ...fakeActor(id), permissions: withoutViewSensitive as ReadonlySet<any> };
+  }
+
+  it("un editor sin el permiso no puede cambiar el DNI/email/teléfono aunque los mande en el formulario", async () => {
+    const admin = fakeActor(actorId);
+    const created = await createPerson(admin, {
+      firstName: "Nora",
+      lastName: "Original",
+      dni: "30666111",
+      email: "nora@example.com",
+      phone: "",
+      organizationId: "",
+      birthDate: "",
+      declaredAge: "",
+    });
+    if (!("id" in created)) throw new Error("no debería pedir confirmación");
+
+    const limitedActor = actorWithoutSensitive(actorId);
+    const result = await updatePerson(limitedActor, created.id, 1, {
+      firstName: "Nora",
+      lastName: "Editada",
+      dni: "30666999", // intento de cambiar el DNI real
+      email: "otro@example.com", // intento de cambiar el email real
+      phone: "+541100000000",
+      organizationId: "",
+      birthDate: "",
+      declaredAge: "",
+    });
+    expect("ok" in result).toBe(true);
+
+    const db = await getDb();
+    const person = await db.selectFrom("people").selectAll().where("id", "=", created.id).executeTakeFirstOrThrow();
+    expect(person.first_name).toBe("Nora"); // esto sí se pudo editar
+    expect(person.last_name).toBe("Editada");
+    expect(person.dni).toBe("30666111"); // el servidor lo ignoró, no "30666999"
+    expect(person.email).toBe("nora@example.com"); // ídem
+  });
+
+  it("un editor CON el permiso sí puede cambiar esos campos", async () => {
+    const admin = fakeActor(actorId);
+    const created = await createPerson(admin, {
+      firstName: "Oscar",
+      lastName: "Original",
+      dni: "30666222",
+      email: "",
+      phone: "",
+      organizationId: "",
+      birthDate: "",
+      declaredAge: "",
+    });
+    if (!("id" in created)) throw new Error("no debería pedir confirmación");
+
+    const result = await updatePerson(admin, created.id, 1, {
+      firstName: "Oscar",
+      lastName: "Original",
+      dni: "30666333",
+      email: "",
+      phone: "",
+      organizationId: "",
+      birthDate: "",
+      declaredAge: "",
+    });
+    expect("ok" in result).toBe(true);
+
+    const db = await getDb();
+    const person = await db.selectFrom("people").select("dni").where("id", "=", created.id).executeTakeFirstOrThrow();
+    expect(person.dni).toBe("30666333");
+  });
+});
+
 describe("desactivar no borra (R8)", () => {
   it("setPersonActive(false) deja la fila con status inactive, no la elimina", async () => {
     const actor = fakeActor(actorId);

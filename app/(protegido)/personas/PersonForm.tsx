@@ -34,11 +34,14 @@ export function PersonForm({
   organizations,
   initialValues = EMPTY_VALUES,
   submitLabel = "Guardar",
+  canEditSensitive = true,
 }: {
   action: (prevState: PersonActionResult, formData: FormData) => Promise<PersonActionResult>;
   organizations: OrganizationOption[];
   initialValues?: PersonFormInitialValues;
   submitLabel?: string;
+  /** Sin people.view_sensitive no se puede ver DNI/email/teléfono, así que tampoco se editan a ciegas (el servidor los ignora igual, esto es solo para no confundir con campos que parecen editables y no lo son). */
+  canEditSensitive?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(action, initialState);
   const confirmDuplicatesRef = useRef<HTMLInputElement>(null);
@@ -71,7 +74,8 @@ export function PersonForm({
           <input
             name="dni"
             defaultValue={initialValues.dni}
-            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
+            disabled={!canEditSensitive}
+            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm disabled:bg-brand-50 disabled:text-brand-400"
           />
         </div>
         <div>
@@ -80,7 +84,8 @@ export function PersonForm({
             name="email"
             type="email"
             defaultValue={initialValues.email}
-            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
+            disabled={!canEditSensitive}
+            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm disabled:bg-brand-50 disabled:text-brand-400"
           />
         </div>
         <div>
@@ -89,9 +94,15 @@ export function PersonForm({
             name="phone"
             placeholder="011 15-1234-5678"
             defaultValue={initialValues.phone}
-            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
+            disabled={!canEditSensitive}
+            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm disabled:bg-brand-50 disabled:text-brand-400"
           />
         </div>
+        {!canEditSensitive ? (
+          <p className="col-span-2 text-xs text-brand-400">
+            DNI, email y teléfono están enmascarados y no se pueden editar sin el permiso para ver datos sensibles.
+          </p>
+        ) : null}
         <div>
           <label className="block text-xs text-brand-500">Organismo</label>
           <select
