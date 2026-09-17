@@ -27,6 +27,20 @@ let cached: SutecbaEnv | null = null;
 export function loadEnv(): SutecbaEnv {
   if (cached) return cached;
 
+  // `next dev`/`build`/`start` cargan `.env` solos (vía @next/env), pero los
+  // scripts sueltos (`tsx scripts/migrate.ts`, etc.) no — nada en el proyecto
+  // los hacía leer el archivo, así que dependían de que la shell ya tuviera
+  // las variables exportadas. Se detectó en despliegue: con SUTECBA_ENV=production
+  // en `.env`, `migrate`/`seed`/`create-admin` seguían reportando `env=local`
+  // porque nunca llegaban a leer el archivo. `process.loadEnvFile()` (Node
+  // 20.6+) no pisa una variable que la shell ya haya exportado (mismo criterio
+  // que dotenv), así que es seguro llamarlo también desde la app de Next.
+  try {
+    process.loadEnvFile();
+  } catch {
+    // Sin .env (tests, o entorno que ya trae todo por variables de shell) — se sigue con lo que haya en process.env.
+  }
+
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const missing = parsed.error.issues.map((i) => i.path.join(".")).join(", ");
