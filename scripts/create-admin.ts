@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { closeDb, getDb } from "../lib/db/client.js";
 import { loadEnv, resolvePgliteDataDir } from "../lib/db/env.js";
+import { activateMigrationConnection } from "../lib/db/script-env.js";
 import {
   assertNoForeignFootprint,
   assertNotBlockedTarget,
@@ -34,9 +35,16 @@ async function main() {
     return;
   }
 
+  // Script administrativo: `sutecba_app` no ve sutecba_meta (reservada a la
+  // conexión de migración), así que la guarda de identidad solo puede
+  // verificarse con la conexión administrativa cuando existe.
+  const usingAdminConnection = activateMigrationConnection();
   const env = loadEnv();
   const pgliteDataDir = resolvePgliteDataDir(env);
-  console.log(`[create-admin] destino: ${describeTarget(env, pgliteDataDir)}`);
+  console.log(
+    `[create-admin] destino: ${describeTarget(env, pgliteDataDir)}` +
+      (usingAdminConnection ? " (conexión de migraciones)" : "")
+  );
 
   assertNotBlockedTarget(env, pgliteDataDir);
   const db = await getDb();

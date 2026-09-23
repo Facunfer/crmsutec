@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { closeDb, getDb } from "../lib/db/client.js";
 import { loadEnv, resolvePgliteDataDir } from "../lib/db/env.js";
+import { activateMigrationConnection } from "../lib/db/script-env.js";
 import {
   assertNoForeignFootprint,
   assertNotBlockedTarget,
@@ -8,7 +9,7 @@ import {
   describeTarget,
   GuardViolationError,
 } from "../lib/db/guards.js";
-import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../lib/permissions/catalog.js";
+import { MODULES, PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../lib/permissions/catalog.js";
 import { toJsonb } from "../lib/db/json.js";
 import type { Json } from "../lib/db/schema.js";
 
@@ -35,6 +36,12 @@ const ORGANIZATION_TYPES: Array<{ key: string; name: string; level: number }> = 
   { key: "ente_publico_no_estatal", name: "Ente público no estatal", level: 1 },
   { key: "dependencia", name: "Dependencia", level: 2 },
   { key: "jubilados_pensionados", name: "Jubilados y pensionados", level: 0 },
+  // Niveles intermedios del organigrama (ministerio → secretaría → … → repartición).
+  { key: "secretaria", name: "Secretaría", level: 2 },
+  { key: "subsecretaria", name: "Subsecretaría", level: 3 },
+  { key: "direccion_general", name: "Dirección General", level: 4 },
+  { key: "direccion", name: "Dirección", level: 5 },
+  { key: "reparticion", name: "Repartición", level: 6 },
 ];
 
 /**
@@ -53,11 +60,34 @@ const ASSOCIATION_TYPES: Array<{ key: string; name: string }> = [
   { key: "grupo_trabajo", name: "Grupo de trabajo" },
 ];
 
+/** Catálogo de tipos de interacción (migración 0017); `sort_order` define el orden en los selectores. */
+const INTERACTION_TYPES: Array<{ key: string; name: string; sortOrder: number }> = [
+  { key: "consulta", name: "Consulta", sortOrder: 10 },
+  { key: "llamada", name: "Llamada", sortOrder: 20 },
+  { key: "gestion", name: "Gestión", sortOrder: 30 },
+  { key: "visita", name: "Visita", sortOrder: 40 },
+  { key: "participation", name: "Participación en actividad", sortOrder: 15 },
+  { key: "otro", name: "Otro", sortOrder: 100 },
+];
+
+const INTERACTION_CHANNELS: Array<{ key: string; name: string; sortOrder: number }> = [
+  { key: "presencial", name: "Presencial", sortOrder: 10 },
+  { key: "telefono", name: "Teléfono", sortOrder: 20 },
+  { key: "correo", name: "Correo", sortOrder: 30 },
+  { key: "whatsapp", name: "WhatsApp", sortOrder: 40 },
+  { key: "formulario", name: "Formulario", sortOrder: 50 },
+  { key: "otro", name: "Otro", sortOrder: 100 },
+];
+
 /** Reutilizable desde el CLI y desde tests de integración. No cierra la conexión. */
 export async function runSeed(): Promise<void> {
+  const usingAdminConnection = activateMigrationConnection();
   const env = loadEnv();
   const pgliteDataDir = resolvePgliteDataDir(env);
-  console.log(`[seed] destino: ${describeTarget(env, pgliteDataDir)}`);
+  console.log(
+    `[seed] destino: ${describeTarget(env, pgliteDataDir)}` +
+      (usingAdminConnection ? " (conexión de migraciones)" : "")
+  );
 
   assertNotBlockedTarget(env, pgliteDataDir);
   const db = await getDb();
@@ -72,12 +102,29 @@ export async function runSeed(): Promise<void> {
       .execute();
   }
 
+  // Los módulos van antes que los permisos: permissions.module_key referencia modules(key).
+  for (const module of MODULES) {
+    await db
+      .insertInto("modules")
+      .values({ key: module.key, name: module.name, sort_order: module.sortOrder, active: true })
+      .onConflict((oc) =>
+        oc.column("key").doUpdateSet({ name: module.name, sort_order: module.sortOrder, active: true })
+      )
+      .execute();
+  }
+
   for (const permission of PERMISSIONS) {
     await db
       .insertInto("permissions")
-      .values({ key: permission.key, description: permission.description })
+      .values({
+        key: permission.key,
+        description: permission.description,
+        module_key: permission.moduleKey,
+      })
       .onConflict((oc) =>
-        oc.column("key").doUpdateSet({ description: permission.description })
+        oc
+          .column("key")
+          .doUpdateSet({ description: permission.description, module_key: permission.moduleKey })
       )
       .execute();
   }
@@ -128,16 +175,38 @@ export async function runSeed(): Promise<void> {
   for (const type of ORGANIZATION_TYPES) {
     await db
       .insertInto("organization_types")
-      .values({ key: type.key, name: type.name, level: type.level })
-      .onConflict((oc) => oc.column("key").doUpdateSet({ name: type.name, level: type.level }))
+      .values({ key: type.key, name: type.name, level: type.level, active: true })
+      .onConflict((oc) =>
+        oc.column("key").doUpdateSet({ name: type.name, level: type.level, active: true })
+      )
       .execute();
   }
 
   for (const type of ASSOCIATION_TYPES) {
     await db
       .insertInto("association_types")
-      .values({ key: type.key, name: type.name })
-      .onConflict((oc) => oc.column("key").doUpdateSet({ name: type.name }))
+      .values({ key: type.key, name: type.name, active: true })
+      .onConflict((oc) => oc.column("key").doUpdateSet({ name: type.name, active: true }))
+      .execute();
+  }
+
+  for (const type of INTERACTION_TYPES) {
+    await db
+      .insertInto("interaction_types")
+      .values({ key: type.key, name: type.name, sort_order: type.sortOrder, active: true })
+      .onConflict((oc) =>
+        oc.column("key").doUpdateSet({ name: type.name, sort_order: type.sortOrder, active: true })
+      )
+      .execute();
+  }
+
+  for (const channel of INTERACTION_CHANNELS) {
+    await db
+      .insertInto("interaction_channels")
+      .values({ key: channel.key, name: channel.name, sort_order: channel.sortOrder, active: true })
+      .onConflict((oc) =>
+        oc.column("key").doUpdateSet({ name: channel.name, sort_order: channel.sortOrder, active: true })
+      )
       .execute();
   }
 
@@ -150,8 +219,9 @@ export async function runSeed(): Promise<void> {
   }
 
   console.log(
-    `[seed] listo. ${ROLES.length} roles, ${PERMISSIONS.length} permisos, ` +
+    `[seed] listo. ${ROLES.length} roles, ${MODULES.length} módulos, ${PERMISSIONS.length} permisos, ` +
       `${ORGANIZATION_TYPES.length} tipos de organismo, ${ASSOCIATION_TYPES.length} tipos de asociación, ` +
+      `${INTERACTION_TYPES.length} tipos y ${INTERACTION_CHANNELS.length} canales de interacción, ` +
       `${DEFAULT_SETTINGS.length} configuraciones por defecto (sin sobreescribir existentes). ` +
       `Sin personas, organismos ni asociaciones concretas de ejemplo.`
   );

@@ -3,7 +3,21 @@ node_modules/
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
 *.log
 .DS_Store
 .data/
 *.tsbuildinfo
+__pycache__/
+*.pyc
+
+# Datos reales/sensibles de importaciones y reportes técnicos generados (nunca versionar: viven fuera del repo, en
+# C:\Users\usuario\Documents\sutecba-fuentes\). Incluye extractos con PII, dry-runs, snapshots y backups lógicos si
+# alguna vez se generaran dentro del repo por error.
+/data/
+*.dump
+*.sql.gz
+credentials/
+*credentials*.txt
+*credentials*.json

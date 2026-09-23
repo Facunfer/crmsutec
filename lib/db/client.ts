@@ -6,6 +6,7 @@ import { unaccent } from "@electric-sql/pglite/contrib/unaccent";
 import { Pool } from "pg";
 import { assertServerOnly } from "../server-only.js";
 import { loadEnv, resolvePgliteDataDir } from "./env.js";
+import { bootstrapSupabaseRolesForPglite, shouldBootstrapPgliteCompat } from "./pglite-bootstrap.js";
 import type { Database } from "./schema.js";
 
 assertServerOnly("lib/db/client.ts");
@@ -75,6 +76,9 @@ async function buildConnection(): Promise<{
   // "extensions" al crear la instancia para poder hacer CREATE EXTENSION
   // (búsqueda de personas sin distinguir acentos, sección 7.2 de SUTECBA_DATABASE.md).
   const pglite = await KyselyPGlite.create(dataDir, { extensions: { pg_trgm, unaccent } });
+  if (shouldBootstrapPgliteCompat(env)) {
+    await bootstrapSupabaseRolesForPglite(env, pglite.client);
+  }
   const dialect: Dialect = {
     ...pglite.dialect,
     createDriver: () => serializePGliteTransactions(pglite.dialect.createDriver()),

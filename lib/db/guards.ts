@@ -43,7 +43,11 @@ export function describeTarget(env: SutecbaEnv, pgliteDataDir: string): string {
 
 /** Guarda 1: rechaza por nombre de host/base/directorio bloqueado. */
 export function assertNotBlockedTarget(env: SutecbaEnv, pgliteDataDir: string): void {
-  const target = `${env.SUTECBA_DATABASE_URL ?? ""} ${pgliteDataDir}`.toLowerCase();
+  // También se revisa la URL administrativa: aunque hoy migrate/seed la copian a
+  // SUTECBA_DATABASE_URL antes de llamar acá, no debe existir camino por el que
+  // apunte a un proyecto bloqueado sin pasar por esta guarda.
+  const target =
+    `${env.SUTECBA_DATABASE_URL ?? ""} ${env.SUTECBA_MIGRATION_DATABASE_URL ?? ""} ${pgliteDataDir}`.toLowerCase();
   for (const pattern of BLOCKED_TARGET_PATTERNS) {
     if (target.includes(pattern.toLowerCase())) {
       throw new GuardViolationError(

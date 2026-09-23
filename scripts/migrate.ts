@@ -1,9 +1,12 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { sql } from "kysely";
-import { closeDb, execRawSql, getDb } from "../lib/db/client.js";
+import { sql, type Kysely } from "kysely";
+import type { Database } from "../lib/db/schema.js";
+import { migrationStatements } from "../lib/db/migration-sql.js";
+import { closeDb, getDb } from "../lib/db/client.js";
 import { loadEnv, resolvePgliteDataDir } from "../lib/db/env.js";
+import { activateMigrationConnection } from "../lib/db/script-env.js";
 import {
   assertNoDestructiveWithoutFlag,
   assertNoForeignFootprint,
@@ -36,18 +39,23 @@ async function ensureMigrationsTable(): Promise<void> {
 
 /** Reutilizable desde el CLI y desde tests de integración. No cierra la conexión. */
 export async function applyMigrations(flags: { yes: boolean; allowDestructive: boolean }) {
+  const usingAdminConnection = activateMigrationConnection();
   const env = loadEnv();
   const pgliteDataDir = resolvePgliteDataDir(env);
 
-  console.log(`[migrate] destino: ${describeTarget(env, pgliteDataDir)}`);
+  console.log(
+    `[migrate] destino: ${describeTarget(env, pgliteDataDir)}` +
+      (usingAdminConnection ? " (conexión de migraciones)" : "")
+  );
 
   assertNotBlockedTarget(env, pgliteDataDir);
+  // Before getDb(): even opening PGlite can create objects/directories.
+  assertProductionConfirmed(env, flags.yes);
 
   const db = await getDb();
   await ensureMigrationsTable();
   await assertNoForeignFootprint(db);
   await assertOrBootstrapSystemIdentity(db);
-  assertProductionConfirmed(env, flags.yes);
 
   const appliedRows = await db.selectFrom("sutecba_migrations").select("filename").execute();
   const applied = new Set(appliedRows.map((r) => r.filename));
@@ -69,15 +77,25 @@ export async function applyMigrations(flags: { yes: boolean; allowDestructive: b
 
     assertNoDestructiveWithoutFlag(filename, sqlText, flags.allowDestructive);
 
-    const escapedFilename = filename.replace(/'/g, "''");
-    const transactional = `begin;\n${sqlText}\ninsert into sutecba_migrations (filename) values ('${escapedFilename}');\ncommit;`;
-
     console.log(`[migrate] aplicando ${filename}...`);
-    await execRawSql(transactional);
+    await applyMigration(db, filename, sqlText, flags.allowDestructive);
     console.log(`[migrate] ${filename} OK`);
   }
 
   console.log(`[migrate] listo. ${pending.length} migración(es) aplicada(s).`);
+}
+
+/** The driver owns the transaction. SQL and ledger use the SAME connection and commit. */
+export async function applyMigration(db: Kysely<Database>, filename: string, source: string, allowDestructive: boolean): Promise<void> {
+  assertNoDestructiveWithoutFlag(filename, source, allowDestructive);
+  const statements = migrationStatements(source);
+  await db.transaction().execute(async (trx) => {
+    await sql`select pg_advisory_xact_lock(hashtext('sutecba:migrations'))`.execute(trx);
+    const applied = await trx.selectFrom("sutecba_migrations").select("filename").where("filename", "=", filename).executeTakeFirst();
+    if (applied) return;
+    for (const statement of statements) await sql.raw(statement).execute(trx);
+    await trx.insertInto("sutecba_migrations").values({ filename }).execute();
+  });
 }
 
 async function main() {

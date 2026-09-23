@@ -23,10 +23,18 @@ export interface RolesTable {
   created_at: Generated<Date>;
 }
 
+export interface ModulesTable {
+  key: string;
+  name: string;
+  sort_order: Generated<number>;
+  active: Generated<boolean>;
+}
+
 export interface PermissionsTable {
   id: Generated<string>;
   key: string;
   description: string;
+  module_key: string;
   created_at: Generated<Date>;
 }
 
@@ -44,6 +52,8 @@ export interface UsersTable {
   role_id: string;
   status: Generated<"active" | "inactive">;
   permissions_version: Generated<number>;
+  /** Afiliación organizativa (informativa). NO otorga acceso: eso lo define user_scopes. */
+  primary_organization_id: string | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
   created_by: string | null;
@@ -92,9 +102,48 @@ export interface OrganizationsTable {
   type_id: string;
   parent_id: string | null;
   name: string;
+  official_code: string | null;
+  valid_from: Date | null;
+  valid_to: Date | null;
   active: Generated<boolean>;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
+}
+
+export interface OrganizationAliasesTable {
+  id: Generated<string>;
+  organization_id: string;
+  /** 0022: NULL = alias global; con valor = alias contextual (solo vale dentro de esa organización). */
+  context_organization_id: string | null;
+  alias: string;
+  /** La completa el trigger de la base (minúsculas, sin acentos). */
+  normalized_alias: Generated<string>;
+  status: Generated<"pending" | "approved" | "rejected">;
+  approved_by: string | null;
+  approved_at: Date | null;
+  created_by: string | null;
+  created_at: Generated<Date>;
+}
+
+export interface UserScopesTable {
+  id: Generated<string>;
+  user_id: string;
+  organization_id: string;
+  include_descendants: Generated<boolean>;
+  granted_by: string;
+  granted_at: Generated<Date>;
+  revoked_at: Date | null;
+  revoked_by: string | null;
+}
+
+export interface UserModulesTable {
+  id: Generated<string>;
+  user_id: string;
+  module_key: string;
+  granted_by: string;
+  granted_at: Generated<Date>;
+  revoked_at: Date | null;
+  revoked_by: string | null;
 }
 
 export type PersonStatus = "active" | "inactive" | "merged";
@@ -104,7 +153,12 @@ export interface PeopleTable {
   id: Generated<string>;
   first_name: string;
   last_name: string;
-  dni: string | null;
+  /** Obligatorio (0021): 7 u 8 dígitos, único entre personas no fusionadas. */
+  dni: string;
+  /** Sensible. Columna independiente del DNI; nunca identificador principal (0021). */
+  cuil_cuit: string | null;
+  /** Procedencia del DNI (0021): explícito o derivado de cuil_cuit. El origen de la persona está en `origin`. */
+  dni_source: Generated<"explicit" | "derived_from_cuil">;
   email: string | null;
   phone: string | null;
   organization_id: string | null;
@@ -158,6 +212,7 @@ export interface AssociationTypesTable {
 export interface AssociationsTable {
   id: Generated<string>;
   type_id: string;
+  owner_organization_id: string;
   name: string;
   description: string | null;
   status: Generated<"active" | "inactive">;
@@ -194,12 +249,25 @@ export type MeetingStatus =
   | "cancelled"
   | "overdue_unclosed";
 
+export type MeetingType = "reunion" | "capacitacion" | "operativo_salud" | "jornada" | "evento" | "otro";
+export type MeetingSchedulePrecision = "exact_datetime" | "date_only" | "unknown";
+
 export interface MeetingsTable {
   id: Generated<string>;
+  owner_organization_id: string;
   name: string;
   description: string | null;
-  starts_at: Date;
-  ends_at: Date;
+  /** NULL solo en eventos importados sin hora conocida (0021, schedule_precision). */
+  starts_at: Date | null;
+  ends_at: Date | null;
+  meeting_type: Generated<MeetingType>;
+  meeting_subtype: string | null;
+  origin: Generated<"manual" | "import">;
+  source_event_key: string | null;
+  import_batch_id: string | null;
+  schedule_precision: Generated<MeetingSchedulePrecision>;
+  event_date: Date | null;
+  source_time_note: string | null;
   location_name: string | null;
   address: string | null;
   organizer_user_id: string | null;
@@ -265,6 +333,7 @@ export type FormStatus = "draft" | "published" | "unpublished" | "archived";
 
 export interface FormsTable {
   id: Generated<string>;
+  owner_organization_id: string;
   slug: string;
   name: string;
   status: Generated<FormStatus>;
@@ -331,6 +400,8 @@ export interface PersonDuplicateCandidatesTable {
   id: Generated<string>;
   person_id: string | null;
   submission_id: string | null;
+  source: Generated<"form" | "import">;
+  import_row_id: string | null;
   match_reason: string;
   status: Generated<"pending" | "linked" | "created_new" | "discarded">;
   resolved_by: string | null;
@@ -348,19 +419,6 @@ export interface NotificationOutboxTable {
   related_entity_id: string | null;
   created_at: Generated<Date>;
   sent_at: Date | null;
-}
-
-export interface AuditLogsTable {
-  id: Generated<string>;
-  actor_user_id: string | null;
-  actor_type: Generated<"user" | "public" | "system">;
-  action: string;
-  entity_type: string;
-  entity_id: string | null;
-  before: JsonColumn | null;
-  after: JsonColumn | null;
-  metadata: JsonColumn | null;
-  created_at: Generated<Date>;
 }
 
 export interface AppSettingsTable {
@@ -382,8 +440,231 @@ export interface SutecbaMigrationsTable {
   applied_at: Generated<Date>;
 }
 
+export interface PersonOrganizationTransfersTable {
+  id: Generated<string>;
+  person_id: string;
+  from_organization_id: string | null;
+  to_organization_id: string;
+  reason: string;
+  transferred_by: string;
+  transferred_at: Generated<Date>;
+}
+
+export interface TagsTable {
+  id: Generated<string>;
+  name: string;
+  /** La completa el trigger de la base. */
+  normalized_name: Generated<string>;
+  category: string | null;
+  is_controlled: Generated<boolean>;
+  is_sensitive: Generated<boolean>;
+  owner_organization_id: string | null;
+  active: Generated<boolean>;
+  created_by: string;
+  created_at: Generated<Date>;
+}
+
+export interface PersonTagsTable {
+  id: Generated<string>;
+  person_id: string;
+  tag_id: string;
+  assigned_by: string;
+  assigned_at: Generated<Date>;
+  removed_at: Date | null;
+  removed_by: string | null;
+}
+
+export interface InteractionTypesTable {
+  id: Generated<string>;
+  key: string;
+  name: string;
+  active: Generated<boolean>;
+  sort_order: Generated<number>;
+}
+
+export interface InteractionChannelsTable {
+  id: Generated<string>;
+  key: string;
+  name: string;
+  active: Generated<boolean>;
+  sort_order: Generated<number>;
+}
+
+export type InteractionStatus = "open" | "completed" | "cancelled" | "voided";
+
+export interface PersonInteractionsTable {
+  id: Generated<string>;
+  person_id: string;
+  owner_organization_id: string;
+  occurred_at: Date;
+  /** date_only: occurred_at es el inicio del día (00:00 Buenos Aires); no se inventa una hora. */
+  occurred_precision: Generated<"exact_datetime" | "date_only">;
+  /** Clave lógica de las interacciones automáticas (idempotencia): meeting_participation:<id> | meeting_attendance:<id>. */
+  source_key: string | null;
+  interaction_type_id: string;
+  channel_id: string | null;
+  subject: string;
+  description: string | null;
+  status: Generated<InteractionStatus>;
+  outcome: string | null;
+  responsible_user_id: string | null;
+  next_follow_up_at: Date | null;
+  meeting_id: string | null;
+  void_reason: string | null;
+  created_by: string;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+  version: Generated<number>;
+}
+
+export interface AssociationInteractionsTable {
+  id: Generated<string>;
+  association_id: string;
+  contact_person_id: string | null;
+  owner_organization_id: string;
+  occurred_at: Date;
+  interaction_type_id: string;
+  channel_id: string | null;
+  subject: string;
+  description: string | null;
+  status: Generated<InteractionStatus>;
+  outcome: string | null;
+  responsible_user_id: string | null;
+  next_follow_up_at: Date | null;
+  meeting_id: string | null;
+  void_reason: string | null;
+  created_by: string;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+  version: Generated<number>;
+}
+
+export interface InteractionLinksTable {
+  id: Generated<string>;
+  person_interaction_id: string;
+  association_interaction_id: string;
+  created_by: string;
+  created_at: Generated<Date>;
+}
+
+export type ImportBatchStatus =
+  | "staged"
+  | "processing"
+  | "in_review"
+  | "approved"
+  | "applied"
+  | "failed"
+  | "cancelled";
+
+export interface ImportBatchesTable {
+  id: Generated<string>;
+  owner_organization_id: string;
+  responsible_user_id: string;
+  status: Generated<ImportBatchStatus>;
+  created_at: Generated<Date>;
+  started_at: Date | null;
+  completed_at: Date | null;
+  created_by: string;
+  notes: string | null;
+  /** 0021: auditoría del apply. 'apply' + status 'applied' = importación real; nunca datos personales en `summary`. */
+  execution_mode: "dry_run" | "apply" | null;
+  plan_hash: string | null;
+  source_system: string | null;
+  sutecba_env: string | null;
+  applied_at: Date | null;
+  summary: unknown | null;
+}
+
+export interface ImportFilesTable {
+  id: Generated<string>;
+  original_name: string;
+  content_hash: string;
+  external_reference: string | null;
+  created_by: string;
+  created_at: Generated<Date>;
+  size_bytes: number | null;
+  source_metadata: JsonColumnWithDefault<Record<string, Json>>;
+}
+
+export interface ImportBatchFilesTable {
+  batch_id: string;
+  file_id: string;
+  linked_by: string;
+  linked_at: Generated<Date>;
+}
+
+export type ParticipationKind = "registration" | "invited" | "attended" | "absent" | "approved" | "unknown" | "participated";
+/** 'standard': flujo normal (invitación, check-in, corrección manual). 'legacy_initial_import': decisión de negocio
+ * exclusiva de la carga histórica inicial de Gabriel (solo junto con participation_kind='participated'). */
+export type ParticipationBasis = "standard" | "legacy_initial_import";
+
+export type ImportRowStatus =
+  | "staged"
+  | "normalized"
+  | "in_review"
+  | "approved"
+  | "applied"
+  | "rejected"
+  | "skipped";
+
+export interface ImportRowsTable {
+  id: Generated<string>;
+  file_id: string;
+  sheet: Generated<string>;
+  row_number: number;
+  raw_data: JsonColumn;
+  normalized_data: JsonColumnWithDefault;
+  row_hash: string;
+  duplicate_of_row_id: string | null;
+  status: Generated<ImportRowStatus>;
+  updated_at: Generated<Date>;
+  source_file_code: string | null;
+  normalized_dni: string | null;
+  dni_source: "explicit" | "derived_from_cuil" | null;
+  normalized_cuil_cuit: string | null;
+  person_id: string | null;
+  meeting_id: string | null;
+  campaign_key: string | null;
+  participation_kind: ParticipationKind | null;
+}
+
+export interface ImportIssuesTable {
+  id: Generated<string>;
+  batch_id: string;
+  import_row_id: string;
+  severity: "warning" | "error";
+  code: string;
+  message: string;
+  status: Generated<"open" | "resolved" | "dismissed">;
+  resolved_by: string | null;
+  resolved_at: Date | null;
+  created_at: Generated<Date>;
+}
+
+export interface ImportEntityLinksTable {
+  id: Generated<string>;
+  import_row_id: string;
+  entity_type: string;
+  entity_id: string;
+  linked_by: string;
+  linked_at: Generated<Date>;
+}
+
+export interface MeetingParticipationsTable {
+  id: Generated<string>;
+  meeting_id: string | null;
+  campaign_key: string | null;
+  person_id: string;
+  participation_kind: ParticipationKind;
+  evidence: string | null;
+  import_row_id: string | null;
+  created_at: Generated<Date>;
+  participation_basis: Generated<ParticipationBasis>;
+}
+
 export interface Database {
   roles: RolesTable;
+  modules: ModulesTable;
   permissions: PermissionsTable;
   role_permissions: RolePermissionsTable;
   users: UsersTable;
@@ -392,6 +673,9 @@ export interface Database {
   public_link_attempts: PublicLinkAttemptsTable;
   organization_types: OrganizationTypesTable;
   organizations: OrganizationsTable;
+  organization_aliases: OrganizationAliasesTable;
+  user_scopes: UserScopesTable;
+  user_modules: UserModulesTable;
   people: PeopleTable;
   person_field_definitions: PersonFieldDefinitionsTable;
   association_types: AssociationTypesTable;
@@ -410,8 +694,22 @@ export interface Database {
   form_submissions: FormSubmissionsTable;
   person_duplicate_candidates: PersonDuplicateCandidatesTable;
   notification_outbox: NotificationOutboxTable;
-  audit_logs: AuditLogsTable;
   app_settings: AppSettingsTable;
+  person_organization_transfers: PersonOrganizationTransfersTable;
+  tags: TagsTable;
+  person_tags: PersonTagsTable;
+  interaction_types: InteractionTypesTable;
+  interaction_channels: InteractionChannelsTable;
+  person_interactions: PersonInteractionsTable;
+  association_interactions: AssociationInteractionsTable;
+  interaction_links: InteractionLinksTable;
+  import_batches: ImportBatchesTable;
+  import_files: ImportFilesTable;
+  import_batch_files: ImportBatchFilesTable;
+  import_rows: ImportRowsTable;
+  import_issues: ImportIssuesTable;
+  import_entity_links: ImportEntityLinksTable;
+  meeting_participations: MeetingParticipationsTable;
   sutecba_meta: SutecbaMetaTable;
   sutecba_migrations: SutecbaMigrationsTable;
 }
