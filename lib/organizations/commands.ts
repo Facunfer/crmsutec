@@ -1,7 +1,6 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { SessionUser } from "../permissions/can.js";
 
 assertServerOnly("lib/organizations/commands.ts");
@@ -41,13 +40,6 @@ export async function createOrganization(
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ORGANIZATION_CREATED",
-    entityType: "organization",
-    entityId: created.id,
-    after: { name, type_id: input.typeId, parent_id: input.parentId ?? null },
-  });
 
   return { id: created.id };
 }
@@ -86,14 +78,6 @@ export async function updateOrganization(
 
   await db.updateTable("organizations").set(patch).where("id", "=", organizationId).execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ORGANIZATION_UPDATED",
-    entityType: "organization",
-    entityId: organizationId,
-    before: { name: existing.name, type_id: existing.type_id, parent_id: existing.parent_id },
-    after: { name: input.name ?? null, type_id: input.typeId ?? null, parent_id: input.parentId ?? null },
-  });
 }
 
 export async function setOrganizationActive(
@@ -110,11 +94,4 @@ export async function setOrganizationActive(
     .where("id", "=", organizationId)
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ORGANIZATION_UPDATED",
-    entityType: "organization",
-    entityId: organizationId,
-    after: { active },
-  });
 }

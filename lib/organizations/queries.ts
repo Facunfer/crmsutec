@@ -66,6 +66,8 @@ export async function listActiveOrganizationOptions(): Promise<OrganizationOptio
     .innerJoin("organization_types", "organization_types.id", "organizations.type_id")
     .select(["organizations.id", "organizations.name", "organization_types.name as typeName"])
     .where("organizations.active", "=", true)
+    // SUTECBA (tipo «sindicato») es propietaria de actividades: nunca es repartición laboral de una persona.
+    .where("organization_types.key", "!=", "sindicato")
     .orderBy("organizations.name", "asc")
     .execute();
 

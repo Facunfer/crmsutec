@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, type ReactNode } from "react";
 import type { RoleKey } from "@/lib/permissions/catalog";
 import type { UserListItem } from "@/lib/users/queries";
 import { resetAccessAction, toggleActiveAction, updateRoleAction, type ActionResult } from "./acciones";
@@ -12,11 +12,15 @@ export function UserRow({
   isSelf,
   assignableRoles,
   canTouch,
+  affiliation,
+  access,
 }: {
   user: UserListItem;
   isSelf: boolean;
   assignableRoles: RoleKey[];
   canTouch: boolean;
+  affiliation?: ReactNode;
+  access?: ReactNode;
 }) {
   const [roleState, roleAction, rolePending] = useActionState(
     updateRoleAction.bind(null, user.id),
@@ -34,11 +38,14 @@ export function UserRow({
   const disabled = !canTouch || isSelf;
 
   return (
-    <tr className="border-b border-brand-100 align-top">
+    <>
+    <tr className="align-top">
       <td className="py-2 pr-4">
         <div className="text-sm font-medium text-brand-900">{user.fullName}</div>
         <div className="text-xs text-brand-400">{user.email}</div>
       </td>
+      <td className="py-2 pr-4 text-sm text-brand-700">{user.areaName ?? "—"}</td>
+      <td className="py-2 pr-4 text-sm text-brand-700">{user.reparticionName ?? (user.areaName ? "Solo el Área" : "—")}</td>
       <td className="py-2 pr-4">
         <form action={roleAction} className="flex items-center gap-2">
           <select
@@ -111,5 +118,12 @@ export function UserRow({
         {isSelf ? <p className="mt-1 text-xs text-brand-300">este es tu propio usuario</p> : null}
       </td>
     </tr>
+    <tr className="border-b border-brand-100">
+      <td colSpan={6} className="pb-3">
+        {affiliation ? <div className="mb-2">{affiliation}</div> : null}
+        {access}
+      </td>
+    </tr>
+    </>
   );
 }
