@@ -19,7 +19,7 @@ async function getSessionMeetingId(): Promise<string | null> {
 }
 
 export interface IdentifyState {
-  kind: "idle" | "need_confirmation" | "already_checked_in" | "not_found" | "not_invited" | "rate_limited" | "no_session";
+  kind: "idle" | "need_confirmation" | "already_checked_in" | "not_found" | "rate_limited" | "no_session";
   firstName?: string;
   confirmToken?: string;
   checkedInAt?: string;

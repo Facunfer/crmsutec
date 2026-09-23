@@ -9,7 +9,7 @@ import {
   listAssociationTypes,
   listManagers,
 } from "@/lib/associations/queries";
-import { listUsers } from "@/lib/users/queries";
+import { listUsersInScope } from "@/lib/users/administration";
 import { AssociationInfoForm } from "./AssociationInfoForm";
 import { StatusButton } from "./StatusButton";
 import { MembersSection } from "./MembersSection";
@@ -19,15 +19,15 @@ export default async function AsociacionFichaPage({ params }: { params: Promise<
   const actor = await requirePermission("associations.view");
   const { id } = await params;
 
-  const association = await getAssociationById(id);
+  const association = await getAssociationById(actor, id);
   if (!association) notFound();
 
   const [types, members, managers, users, metrics] = await Promise.all([
     listAssociationTypes(),
-    listActiveMembers(id),
-    listManagers(id),
-    listUsers(),
-    getAssociationMetrics(id),
+    listActiveMembers(actor, id),
+    listManagers(actor, id),
+    listUsersInScope(actor),
+    getAssociationMetrics(actor, id),
   ]);
 
   const canEdit = can(actor, "associations.edit");

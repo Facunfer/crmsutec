@@ -77,7 +77,13 @@ export async function checkLoginRateLimit(identifier: string, ip: string): Promi
   return { allowed: true };
 }
 
-/** No obligatoria para el MVP; documentada como limpieza periódica opcional. */
+/**
+ * MANTENIMIENTO PENDIENTE — no se ejecuta en runtime. Borra físicamente intentos de login viejos, y
+ * `sutecba_app` NO tiene DELETE sobre `login_attempts` (a propósito: nada en la app la llama). Si
+ * hace falta purgar, tiene que ser una tarea administrativa con la conexión de mantenimiento
+ * (SUTECBA_MIGRATION_DATABASE_URL) o una decisión explícita posterior; no se amplían los GRANT del
+ * rol runtime por esto.
+ */
 export async function purgeOldLoginAttempts(olderThanDays = 30): Promise<void> {
   const db = await getDb();
   await sql`delete from login_attempts where created_at < now() - (${olderThanDays} || ' days')::interval`.execute(

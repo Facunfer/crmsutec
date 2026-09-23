@@ -14,8 +14,8 @@ export interface SimpleResult {
 }
 
 export async function countAudienceAction(spec: MeetingAudienceSpec): Promise<{ count: number }> {
-  await requireUser();
-  const count = await countAudience(spec);
+  const actor = await requireUser();
+  const count = await countAudience(actor, spec);
   return { count };
 }
 
@@ -45,9 +45,9 @@ export async function withdrawInvitationAction(meetingId: string, invitationId: 
 }
 
 export async function searchPersonForInvitationAction(search: string): Promise<{ results: Array<{ id: string; firstName: string; lastName: string }> }> {
-  await requireUser();
+  const actor = await requireUser();
   if (search.trim().length < 2) return { results: [] };
-  const results = await searchAnyActivePeople(search);
+  const results = await searchAnyActivePeople(actor, search);
   return { results };
 }
 

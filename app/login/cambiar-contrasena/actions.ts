@@ -7,7 +7,6 @@ import { getSessionUser } from "@/lib/auth/guard";
 import { hashPassword, validatePasswordStrength, verifyPassword } from "@/lib/auth/passwords";
 import { setSessionCookie } from "@/lib/auth/cookies";
 import { bumpPermissionsVersion, createSession, revokeAllSessionsForUser } from "@/lib/auth/session";
-import { writeAuditLog } from "@/lib/audit/log";
 
 export interface ChangePasswordState {
   error?: string;
@@ -64,14 +63,6 @@ export async function changePassword(
   const { token, expiresAt } = await createSession(user.id, { ip, userAgent });
   await setSessionCookie(token, expiresAt);
 
-  await writeAuditLog({
-    actorUserId: user.id,
-    actorType: "user",
-    action: "PASSWORD_RESET",
-    entityType: "user",
-    entityId: user.id,
-    metadata: { self_service: true },
-  });
 
   redirect("/dashboard");
 }

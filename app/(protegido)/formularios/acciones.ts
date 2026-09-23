@@ -18,6 +18,7 @@ export async function createFormAction(_prevState: ActionResult, formData: FormD
     const result = await createForm(actor, {
       name: String(formData.get("name") ?? ""),
       slug: String(formData.get("slug") ?? ""),
+      ownerOrganizationId: String(formData.get("ownerOrganizationId") ?? ""),
     });
     createdId = result.id;
   } catch (err) {

@@ -2,8 +2,8 @@ import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { SessionUser } from "../permissions/can.js";
+import { canAccessAssociation, canAccessPerson, orgScope } from "../scope/organizations.js";
 
 assertServerOnly("lib/associations/members.ts");
 
@@ -17,6 +17,11 @@ export async function addMember(
   role?: string
 ): Promise<void> {
   assertPermission(actor, "associations.manage_members");
+
+  // Asociación y persona deben estar ambas dentro del alcance: son dos registros distintos.
+  if (!(await canAccessAssociation(actor, associationId)) || !(await canAccessPerson(actor, personId))) {
+    throw new AssociationMemberError("La asociación o la persona no existe.");
+  }
 
   const db = await getDb();
   const existing = await db
@@ -33,13 +38,6 @@ export async function addMember(
     .values({ association_id: associationId, person_id: personId, role: role || null, added_by: actor.id })
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_MEMBER_ADDED",
-    entityType: "association",
-    entityId: associationId,
-    metadata: { person_id: personId },
-  });
 }
 
 export async function removeMember(actor: SessionUser, membershipId: string): Promise<void> {
@@ -54,19 +52,16 @@ export async function removeMember(actor: SessionUser, membershipId: string): Pr
     .executeTakeFirst();
   if (!membership) return;
 
+  if (!(await canAccessAssociation(actor, membership.association_id))) {
+    throw new AssociationMemberError("La asociación no existe.");
+  }
+
   await db
     .updateTable("people_associations")
     .set({ status: "inactive", removed_at: new Date(), removed_by: actor.id })
     .where("id", "=", membershipId)
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_MEMBER_REMOVED",
-    entityType: "association",
-    entityId: membership.association_id,
-    metadata: { person_id: membership.person_id },
-  });
 }
 
 /**
@@ -85,6 +80,10 @@ export async function bulkAddMembers(
   if (personIds.length === 0) return 0;
   const ids = personIds.slice(0, 5000);
 
+  if (!(await canAccessAssociation(actor, associationId))) {
+    throw new AssociationMemberError("La asociación no existe.");
+  }
+
   const db = await getDb();
   const result = await sql<{ person_id: string }>`
     insert into people_associations (person_id, association_id, added_by)
@@ -92,6 +91,7 @@ export async function bulkAddMembers(
     from people p
     where p.id in (${sql.join(ids)})
       and p.status = 'active'
+      and ${orgScope(actor, "p.organization_id")}
       and not exists (
         select 1 from people_associations pa
         where pa.person_id = p.id
@@ -103,13 +103,6 @@ export async function bulkAddMembers(
 
   const insertedCount = result.rows.length;
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_MEMBER_ADDED",
-    entityType: "association",
-    entityId: associationId,
-    metadata: { bulk: true, requested: ids.length, inserted: insertedCount },
-  });
 
   return insertedCount;
 }
@@ -125,19 +118,19 @@ export async function addManager(
     throw new AssociationMemberError("Elegí un usuario o una persona como responsable.");
   }
 
+  if (!(await canAccessAssociation(actor, associationId))) {
+    throw new AssociationMemberError("La asociación no existe.");
+  }
+  if (input.personId && !(await canAccessPerson(actor, input.personId))) {
+    throw new AssociationMemberError("La persona no existe.");
+  }
+
   const db = await getDb();
   await db
     .insertInto("association_managers")
     .values({ association_id: associationId, user_id: input.userId ?? null, person_id: input.personId ?? null })
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_UPDATED",
-    entityType: "association",
-    entityId: associationId,
-    metadata: { manager_added: input },
-  });
 }
 
 export async function removeManager(actor: SessionUser, managerId: string): Promise<void> {
@@ -151,13 +144,10 @@ export async function removeManager(actor: SessionUser, managerId: string): Prom
     .executeTakeFirst();
   if (!manager) return;
 
+  if (!(await canAccessAssociation(actor, manager.association_id))) {
+    throw new AssociationMemberError("La asociación no existe.");
+  }
+
   await db.deleteFrom("association_managers").where("id", "=", managerId).execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_UPDATED",
-    entityType: "association",
-    entityId: manager.association_id,
-    metadata: { manager_removed: managerId },
-  });
 }

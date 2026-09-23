@@ -1,11 +1,11 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import { toJsonb } from "../db/json.js";
 import type { Json } from "../db/schema.js";
 import type { SessionUser } from "../permissions/can.js";
 import { resolveAudienceIds, type MeetingAudienceSpec } from "./audience.js";
+import { canAccessMeeting } from "../scope/organizations.js";
 import { canManageInvitations, STATUS_LABEL } from "./state-machine.js";
 import { generateInvitationToken, hashInvitationToken } from "./tokens.js";
 
@@ -43,6 +43,8 @@ export async function createInvitationBatch(
 ): Promise<CreateInvitationBatchResult> {
   assertPermission(actor, "meetings.manage_invitations");
 
+  if (!(await canAccessMeeting(actor, meetingId))) throw new MeetingInvitationError("La reunión no existe.");
+
   const db = await getDb();
   const meeting = await db.selectFrom("meetings").selectAll().where("id", "=", meetingId).executeTakeFirst();
   if (!meeting) throw new MeetingInvitationError("La reunión no existe.");
@@ -52,7 +54,7 @@ export async function createInvitationBatch(
     );
   }
 
-  const resolvedIds = await resolveAudienceIds(spec);
+  const resolvedIds = await resolveAudienceIds(actor, spec);
   if (resolvedIds.length === 0) {
     throw new MeetingInvitationError("La audiencia elegida no incluye a ninguna persona activa.");
   }
@@ -125,19 +127,6 @@ export async function createInvitationBatch(
     }
   });
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "INVITATIONS_CREATED",
-    entityType: "meeting",
-    entityId: meetingId,
-    metadata: {
-      batch_id: batch.id,
-      resolved: resolvedIds.length,
-      created: brandNewIds.length,
-      revived: withdrawnRows.length,
-      already_invited: activeExistingIds.size,
-    },
-  });
 
   return {
     batchId: batch.id,
@@ -161,7 +150,9 @@ export interface InvitationRow {
   withdrawn: boolean;
 }
 
-export async function listInvitations(meetingId: string): Promise<InvitationRow[]> {
+export async function listInvitations(actor: SessionUser, meetingId: string): Promise<InvitationRow[]> {
+  if (!(await canAccessMeeting(actor, meetingId))) return [];
+
   const db = await getDb();
   const rows = await db
     .selectFrom("meeting_invitations")
@@ -207,17 +198,14 @@ export async function withdrawInvitation(actor: SessionUser, invitationId: strin
     .executeTakeFirst();
   if (!invitation) return;
 
+  if (!(await canAccessMeeting(actor, invitation.meeting_id))) {
+    throw new MeetingInvitationError("La reunión no existe.");
+  }
+
   await db
     .updateTable("meeting_invitations")
     .set({ withdrawn_at: new Date(), withdrawn_by: actor.id })
     .where("id", "=", invitationId)
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "INVITATION_WITHDRAWN",
-    entityType: "meeting",
-    entityId: invitation.meeting_id,
-    metadata: { person_id: invitation.person_id },
-  });
 }

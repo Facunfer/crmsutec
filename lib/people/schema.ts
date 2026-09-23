@@ -9,6 +9,8 @@ import { z } from "zod";
 export const personInputSchema = z.object({
   firstName: z.string().trim().min(1, "El nombre es obligatorio."),
   lastName: z.string().trim().min(1, "El apellido es obligatorio."),
+  // Forma tolerante a propósito: un usuario sin people.view_sensitive edita con el campo deshabilitado (no viaja).
+  // La OBLIGATORIEDAD la exige el dominio (normalizePersonInput / updatePerson) y PostgreSQL (NOT NULL + formato).
   dni: z.string().trim().optional().or(z.literal("")),
   email: z.string().trim().optional().or(z.literal("")),
   phone: z.string().trim().optional().or(z.literal("")),

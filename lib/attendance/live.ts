@@ -1,4 +1,6 @@
 import { getDb } from "../db/client.js";
+import type { SessionUser } from "../permissions/can.js";
+import { canAccessMeeting, orgScope } from "../scope/organizations.js";
 import { assertServerOnly } from "../server-only.js";
 
 assertServerOnly("lib/attendance/live.ts");
@@ -18,7 +20,10 @@ export interface LivePanelData {
 }
 
 /** Todo lo que muestra el panel en vivo se deriva de invitaciones/check-ins, nunca se guarda aparte (sección 6.2). */
-export async function getLivePanelData(meetingId: string): Promise<LivePanelData> {
+/** null si la reunión no existe o está fuera del alcance del usuario. */
+export async function getLivePanelData(actor: SessionUser, meetingId: string): Promise<LivePanelData | null> {
+  if (!(await canAccessMeeting(actor, meetingId))) return null;
+
   const db = await getDb();
 
   const invitations = await db
@@ -97,9 +102,14 @@ export interface QuickSearchResult {
 }
 
 /** Búsqueda rápida por nombre/DNI para acreditar a mano desde el panel (sección 12.3). */
-export async function quickSearchForAccreditation(meetingId: string, search: string): Promise<QuickSearchResult[]> {
+export async function quickSearchForAccreditation(
+  actor: SessionUser,
+  meetingId: string,
+  search: string
+): Promise<QuickSearchResult[]> {
   const term = search.trim();
   if (term.length < 2) return [];
+  if (!(await canAccessMeeting(actor, meetingId))) return [];
 
   const db = await getDb();
   const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
@@ -108,6 +118,7 @@ export async function quickSearchForAccreditation(meetingId: string, search: str
     .selectFrom("people")
     .select(["id", "first_name", "last_name"])
     .where("status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"))
     .where((eb) => eb.or([eb("first_name", "ilike", pattern), eb("last_name", "ilike", pattern), eb("dni", "ilike", pattern)]))
     .limit(15)
     .execute();

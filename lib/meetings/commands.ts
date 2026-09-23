@@ -2,8 +2,9 @@ import { getDb } from "../db/client.js";
 import { parseLocalDateTimeInBusinessTz } from "../datetime.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { SessionUser } from "../permissions/can.js";
+import { canActorOwnInOrganization } from "../organizations/ownership.js";
+import { canAccessAssociation, canAccessMeeting } from "../scope/organizations.js";
 import type { MeetingInput } from "./schema.js";
 import { canEditCoreFields, canTransition, STATUS_LABEL, type MeetingStatus } from "./state-machine.js";
 
@@ -11,13 +12,20 @@ assertServerOnly("lib/meetings/commands.ts");
 
 export class MeetingCommandError extends Error {}
 
-export async function createMeeting(actor: SessionUser, input: MeetingInput): Promise<{ id: string }> {
+export type CreateMeetingInput = MeetingInput & { ownerOrganizationId: string };
+
+export async function createMeeting(actor: SessionUser, input: CreateMeetingInput): Promise<{ id: string }> {
   assertPermission(actor, "meetings.create");
+
+  if (!(await canActorOwnInOrganization(actor.id, input.ownerOrganizationId))) {
+    throw new MeetingCommandError("La unidad organizativa no existe, está inactiva o está fuera de tu alcance.");
+  }
 
   const db = await getDb();
   const created = await db
     .insertInto("meetings")
     .values({
+      owner_organization_id: input.ownerOrganizationId,
       name: input.name.trim(),
       description: input.description?.trim() || null,
       starts_at: parseLocalDateTimeInBusinessTz(input.startsAt),
@@ -36,19 +44,14 @@ export async function createMeeting(actor: SessionUser, input: MeetingInput): Pr
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "MEETING_CREATED",
-    entityType: "meeting",
-    entityId: created.id,
-    after: { name: input.name, starts_at: input.startsAt, ends_at: input.endsAt },
-  });
 
   return { id: created.id };
 }
 
 export async function updateMeeting(actor: SessionUser, meetingId: string, input: MeetingInput): Promise<void> {
   assertPermission(actor, "meetings.edit");
+
+  if (!(await canAccessMeeting(actor, meetingId))) throw new MeetingCommandError("La reunión no existe.");
 
   const db = await getDb();
   const existing = await db.selectFrom("meetings").selectAll().where("id", "=", meetingId).executeTakeFirst();
@@ -66,6 +69,10 @@ export async function updateMeeting(actor: SessionUser, meetingId: string, input
       description: input.description?.trim() || null,
       starts_at: parseLocalDateTimeInBusinessTz(input.startsAt),
       ends_at: parseLocalDateTimeInBusinessTz(input.endsAt),
+      // Cargar fecha y hora reales en una actividad importada (date_only/unknown) la vuelve exacta:
+      // el día suelto deja de ser la fuente de verdad.
+      schedule_precision: "exact_datetime",
+      event_date: null,
       location_name: input.locationName?.trim() || null,
       address: input.address?.trim() || null,
       notes: input.notes?.trim() || null,
@@ -78,14 +85,6 @@ export async function updateMeeting(actor: SessionUser, meetingId: string, input
     .where("id", "=", meetingId)
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "MEETING_UPDATED",
-    entityType: "meeting",
-    entityId: meetingId,
-    before: { name: existing.name, starts_at: existing.starts_at.toISOString(), ends_at: existing.ends_at.toISOString() },
-    after: { name: input.name, starts_at: input.startsAt, ends_at: input.endsAt },
-  });
 }
 
 export async function changeMeetingStatus(
@@ -94,6 +93,8 @@ export async function changeMeetingStatus(
   targetStatus: MeetingStatus
 ): Promise<void> {
   assertPermission(actor, "meetings.change_status");
+
+  if (!(await canAccessMeeting(actor, meetingId))) throw new MeetingCommandError("La reunión no existe.");
 
   const db = await getDb();
   const existing = await db.selectFrom("meetings").selectAll().where("id", "=", meetingId).executeTakeFirst();
@@ -120,19 +121,13 @@ export async function changeMeetingStatus(
     }
   });
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "MEETING_STATUS_CHANGED",
-    entityType: "meeting",
-    entityId: meetingId,
-    before: { status: existing.status },
-    after: { status: targetStatus },
-  });
 }
 
 /** Invalida todos los QR ya emitidos (sección 12.1): el secreto real se deriva de este número + el id de la reunión. */
 export async function regenerateQrSecret(actor: SessionUser, meetingId: string): Promise<void> {
   assertPermission(actor, "meetings.change_status");
+
+  if (!(await canAccessMeeting(actor, meetingId))) throw new MeetingCommandError("La reunión no existe.");
 
   const db = await getDb();
   const updated = await db
@@ -143,13 +138,6 @@ export async function regenerateQrSecret(actor: SessionUser, meetingId: string):
     .executeTakeFirst();
   if (!updated) throw new MeetingCommandError("La reunión no existe.");
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "QR_SECRET_ROTATED",
-    entityType: "meeting",
-    entityId: meetingId,
-    after: { qr_secret_version: updated.qr_secret_version },
-  });
 }
 
 export async function setMeetingAssociations(
@@ -158,6 +146,15 @@ export async function setMeetingAssociations(
   associationIds: string[]
 ): Promise<void> {
   assertPermission(actor, "meetings.edit");
+
+  if (!(await canAccessMeeting(actor, meetingId))) throw new MeetingCommandError("La reunión no existe.");
+
+  // Las asociaciones a vincular también tienen que estar dentro del alcance del usuario.
+  for (const associationId of associationIds) {
+    if (!(await canAccessAssociation(actor, associationId))) {
+      throw new MeetingCommandError("Una de las asociaciones no existe.");
+    }
+  }
 
   const db = await getDb();
   const existing = await db.selectFrom("meetings").select("status").where("id", "=", meetingId).executeTakeFirst();
@@ -178,11 +175,4 @@ export async function setMeetingAssociations(
     }
   });
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "MEETING_UPDATED",
-    entityType: "meeting",
-    entityId: meetingId,
-    metadata: { associations_set: associationIds },
-  });
 }

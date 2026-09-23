@@ -37,8 +37,9 @@ export function isPubliclyRespondable(status: MeetingStatus): boolean {
   return status === "scheduled";
 }
 
-export function isOverdueUnclosed(status: MeetingStatus, endsAt: Date): boolean {
-  return (status === "scheduled" || status === "in_progress") && endsAt.getTime() < Date.now();
+/** Una actividad importada sin hora de fin (fecha pendiente o solo el día) nunca cuenta como "vencida sin cerrar". */
+export function isOverdueUnclosed(status: MeetingStatus, endsAt: Date | null): boolean {
+  return (status === "scheduled" || status === "in_progress") && endsAt !== null && endsAt.getTime() < Date.now();
 }
 
 export const STATUS_LABEL: Record<MeetingStatus, string> = {

@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import type { PermissionKey, RoleKey } from "../permissions/catalog.js";
+import type { ModuleKey, PermissionKey, RoleKey } from "../permissions/catalog.js";
 import type { SessionUser } from "../permissions/can.js";
 
 assertServerOnly("lib/auth/session.ts");
@@ -47,11 +48,18 @@ export async function createSession(
     })
     .execute();
 
-  // Limpieza oportunista: no hace falta un cron aparte para el MVP.
+  // Limpieza oportunista, lógica: las sesiones vencidas de este usuario se marcan como
+  // revocadas en vez de borrarse. El rol runtime (sutecba_app) no tiene DELETE sobre
+  // `sessions` a propósito; un borrado físico de sesiones viejas, si algún día hace
+  // falta, es mantenimiento con la conexión administrativa. La sesión recién creada
+  // no se toca: su `expires_at` está en el futuro.
+  const now = new Date();
   await db
-    .deleteFrom("sessions")
+    .updateTable("sessions")
+    .set({ revoked_at: now })
     .where("user_id", "=", userId)
-    .where("expires_at", "<", new Date())
+    .where("expires_at", "<", now)
+    .where("revoked_at", "is", null)
     .execute();
 
   return { token, expiresAt };
@@ -101,6 +109,12 @@ export async function loadSessionUser(token: string): Promise<SessionUser | null
     .where("role_permissions.role_id", "=", role.id)
     .execute();
 
+  // Misma fuente que la base: MASTER_GLOBAL recibe todos los módulos activos sin
+  // filas en user_modules; el resto, los suyos vigentes.
+  const moduleRows = await sql<{ module_key: string }>`
+    select module_key from user_enabled_modules(${user.id}::uuid)
+  `.execute(db);
+
   return {
     id: user.id,
     email: user.email,
@@ -109,6 +123,7 @@ export async function loadSessionUser(token: string): Promise<SessionUser | null
     roleKey: role.key as RoleKey,
     mustChangePassword: user.must_change_password,
     permissions: new Set(permissionRows.map((r) => r.key as PermissionKey)),
+    enabledModules: new Set(moduleRows.rows.map((r) => r.module_key as ModuleKey)),
   };
 }
 

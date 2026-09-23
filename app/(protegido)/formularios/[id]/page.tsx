@@ -21,14 +21,14 @@ export default async function FormDetailPage({ params }: { params: Promise<{ id:
   const actor = await requirePermission("forms.view");
   const { id } = await params;
 
-  const form = await getFormById(id);
+  const form = await getFormById(actor, id);
   if (!form) notFound();
 
   const [fields, actions, fieldDefinitions, associations] = await Promise.all([
-    listFormFields(id),
-    listFormActions(id),
+    listFormFields(actor, id),
+    listFormActions(actor, id),
     listFieldDefinitions({ onlyActive: true }),
-    listAssociations(),
+    listAssociations(actor),
   ]);
 
   const canEdit = can(actor, "forms.edit") && form.status !== "archived";

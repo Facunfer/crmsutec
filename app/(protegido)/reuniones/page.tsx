@@ -3,6 +3,8 @@ import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { listMeetings, type MeetingListFilter } from "@/lib/meetings/queries";
 import { STATUS_LABEL } from "@/lib/meetings/state-machine";
+import { formatMeetingWhen } from "@/lib/meetings/when";
+import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
 import { CreateMeetingForm } from "./CreateMeetingForm";
 
 function formatDateTime(date: Date): string {
@@ -28,7 +30,7 @@ export default async function ReunionesPage({
   const filter: MeetingListFilter = { status: (sp.status as MeetingListFilter["status"]) || "all" };
   const preselectedAssociationId = sp.associationId || undefined;
 
-  const meetings = await listMeetings(filter);
+  const meetings = await listMeetings(actor, filter);
 
   return (
     <div className="space-y-6">
@@ -37,7 +39,10 @@ export default async function ReunionesPage({
       </div>
 
       {can(actor, "meetings.create") ? (
-        <CreateMeetingForm preselectedAssociationId={preselectedAssociationId} />
+        <CreateMeetingForm
+          preselectedAssociationId={preselectedAssociationId}
+          organizations={await listOwnerOrganizationOptions(actor.id)}
+        />
       ) : null}
 
       <div className="flex flex-wrap gap-2 text-sm">
@@ -64,6 +69,7 @@ export default async function ReunionesPage({
               <th className="py-2 pr-4 font-medium">Inicio</th>
               <th className="py-2 pr-4 font-medium">Lugar</th>
               <th className="py-2 pr-4 font-medium">Organizador</th>
+              <th className="py-2 pr-4 font-medium">Participantes</th>
               <th className="py-2 pr-4 font-medium">Invitados</th>
               <th className="py-2 pr-4 font-medium">Confirmados</th>
               <th className="py-2 pr-4 font-medium">Estado</th>
@@ -77,9 +83,10 @@ export default async function ReunionesPage({
                     {m.name}
                   </Link>
                 </td>
-                <td className="py-2 pr-4">{formatDateTime(m.startsAt)}</td>
+                <td className="py-2 pr-4">{formatMeetingWhen(m)}</td>
                 <td className="py-2 pr-4">{m.locationName ?? "—"}</td>
                 <td className="py-2 pr-4">{m.organizerName ?? "—"}</td>
+                <td className="py-2 pr-4">{m.participantsCount}</td>
                 <td className="py-2 pr-4">{m.invitedCount}</td>
                 <td className="py-2 pr-4">{m.confirmedCount}</td>
                 <td className="py-2 pr-4">

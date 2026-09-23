@@ -2,10 +2,19 @@ import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { isOverdueUnclosed, STATUS_LABEL, type MeetingStatus } from "../meetings/state-machine.js";
+import type { SessionUser } from "../permissions/can.js";
+import { orgScope } from "../scope/organizations.js";
+import { listUsersInScope } from "../users/administration.js";
 
 assertServerOnly("lib/analytics/queries.ts");
 
 /**
+ * Todos los indicadores se calculan SOLO sobre registros accesibles al usuario:
+ * cada consulta parte de `orgScope(actor, ...)` (lib/scope/organizations.ts).
+ * MASTER_GLOBAL ve agregados globales; un usuario con alcance limitado, solo los
+ * de sus unidades (y dependientes si su alcance las incluye). Ninguna consulta
+ * puede agregarse sin pasar por el alcance: por eso todas reciben `actor`.
+ *
  * Indicadores siempre calculados en consulta, nunca guardados (lección de
  * la sección 6.2 del prompt): todo acá se deriva de las tablas de negocio
  * en el momento, para que el dashboard y esta pantalla nunca puedan
@@ -60,14 +69,16 @@ export interface PeopleAnalytics {
   missingOrganization: number;
 }
 
-export async function getPeopleAnalytics(): Promise<PeopleAnalytics> {
+export async function getPeopleAnalytics(actor: SessionUser): Promise<PeopleAnalytics> {
   const db = await getDb();
+  const inScope = orgScope(actor, "people.organization_id");
 
   const [statusRows, originRows, orgRows, monthRows, missing] = await Promise.all([
-    db.selectFrom("people").select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
-    db.selectFrom("people").select(["origin", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("origin").execute(),
+    db.selectFrom("people").where(inScope).select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
+    db.selectFrom("people").where(inScope).select(["origin", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("origin").execute(),
     db
       .selectFrom("people")
+      .where(inScope)
       .leftJoin("organizations", "organizations.id", "people.organization_id")
       .select([
         ({ fn }) => fn.coalesce("organizations.name", sql<string>`'Sin organismo'`).as("name"),
@@ -80,12 +91,14 @@ export async function getPeopleAnalytics(): Promise<PeopleAnalytics> {
       .execute(),
     db
       .selectFrom("people")
+      .where(inScope)
       .select([monthKeyExpr("people.created_at").as("month"), ({ fn }) => fn.count<number>("id").as("count")])
       .where("created_at", ">=", new Date(Date.now() - 366 * 86_400_000))
       .groupBy("month")
       .execute(),
     db
       .selectFrom("people")
+      .where(inScope)
       .select([
         ({ fn, eb }) => fn.count<number>(eb.case().when("dni", "is", null).then(1).end()).as("missing_dni"),
         ({ fn, eb }) => fn.count<number>(eb.case().when("email", "is", null).then(1).end()).as("missing_email"),
@@ -124,13 +137,15 @@ export interface AssociationsAnalytics {
   topByMembers: Serie[];
 }
 
-export async function getAssociationsAnalytics(): Promise<AssociationsAnalytics> {
+export async function getAssociationsAnalytics(actor: SessionUser): Promise<AssociationsAnalytics> {
   const db = await getDb();
+  const inScope = orgScope(actor, "associations.owner_organization_id");
 
   const [statusRows, typeRows, topRows] = await Promise.all([
-    db.selectFrom("associations").select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
+    db.selectFrom("associations").where(inScope).select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
     db
       .selectFrom("associations")
+      .where(inScope)
       .innerJoin("association_types", "association_types.id", "associations.type_id")
       .select(["association_types.name", ({ fn }) => fn.count<number>("associations.id").as("count")])
       .where("associations.status", "=", "active")
@@ -138,6 +153,7 @@ export async function getAssociationsAnalytics(): Promise<AssociationsAnalytics>
       .execute(),
     db
       .selectFrom("associations")
+      .where(inScope)
       .leftJoin("people_associations", (join) =>
         join.onRef("people_associations.association_id", "=", "associations.id").on("people_associations.status", "=", "active")
       )
@@ -172,24 +188,33 @@ export interface MeetingsAnalytics {
   attendanceRate: number | null;
 }
 
-export async function getMeetingsAnalytics(): Promise<MeetingsAnalytics> {
+export async function getMeetingsAnalytics(actor: SessionUser): Promise<MeetingsAnalytics> {
   const db = await getDb();
+  const inScope = orgScope(actor, "meetings.owner_organization_id");
 
   const [meetings, monthRows, invitationRows, attendanceCount] = await Promise.all([
-    db.selectFrom("meetings").select(["status", "ends_at"]).execute(),
+    db.selectFrom("meetings").where(inScope).select(["status", "ends_at"]).execute(),
     db
       .selectFrom("meetings")
+      .where(inScope)
       .select([monthKeyExpr("starts_at").as("month"), ({ fn }) => fn.count<number>("id").as("count")])
       .where("starts_at", ">=", new Date(Date.now() - 366 * 86_400_000))
       .groupBy("month")
       .execute(),
     db
       .selectFrom("meeting_invitations")
-      .select(["response_status", ({ fn }) => fn.count<number>("id").as("count")])
-      .where("withdrawn_at", "is", null)
-      .groupBy("response_status")
+      .innerJoin("meetings", "meetings.id", "meeting_invitations.meeting_id")
+      .select(["meeting_invitations.response_status", ({ fn }) => fn.count<number>("meeting_invitations.id").as("count")])
+      .where("meeting_invitations.withdrawn_at", "is", null)
+      .where(inScope)
+      .groupBy("meeting_invitations.response_status")
       .execute(),
-    db.selectFrom("meeting_attendance").select(({ fn }) => fn.count<number>("id").as("count")).executeTakeFirstOrThrow(),
+    db
+      .selectFrom("meeting_attendance")
+      .innerJoin("meetings", "meetings.id", "meeting_attendance.meeting_id")
+      .select(({ fn }) => fn.count<number>("meeting_attendance.id").as("count"))
+      .where(inScope)
+      .executeTakeFirstOrThrow(),
   ]);
 
   const displayStatusCounts = new Map<string, number>();
@@ -235,22 +260,34 @@ const MATCH_RESULT_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-export async function getFormsAnalytics(): Promise<FormsAnalytics> {
+export async function getFormsAnalytics(actor: SessionUser): Promise<FormsAnalytics> {
   const db = await getDb();
+  const inScope = orgScope(actor, "forms.owner_organization_id");
 
   const [formStatusRows, monthRows, matchResultRows, pendingCount] = await Promise.all([
-    db.selectFrom("forms").select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
+    db.selectFrom("forms").where(inScope).select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
     db
       .selectFrom("form_submissions")
-      .select([monthKeyExpr("created_at").as("month"), ({ fn }) => fn.count<number>("id").as("count")])
-      .where("created_at", ">=", new Date(Date.now() - 366 * 86_400_000))
+      .innerJoin("forms", "forms.id", "form_submissions.form_id")
+      .select([monthKeyExpr("form_submissions.created_at").as("month"), ({ fn }) => fn.count<number>("form_submissions.id").as("count")])
+      .where("form_submissions.created_at", ">=", new Date(Date.now() - 366 * 86_400_000))
+      .where(inScope)
       .groupBy("month")
       .execute(),
-    db.selectFrom("form_submissions").select(["match_result", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("match_result").execute(),
+    db
+      .selectFrom("form_submissions")
+      .innerJoin("forms", "forms.id", "form_submissions.form_id")
+      .select(["form_submissions.match_result", ({ fn }) => fn.count<number>("form_submissions.id").as("count")])
+      .where(inScope)
+      .groupBy("form_submissions.match_result")
+      .execute(),
     db
       .selectFrom("person_duplicate_candidates")
-      .select(({ fn }) => fn.count<number>("id").as("count"))
-      .where("status", "=", "pending")
+      .innerJoin("form_submissions", "form_submissions.id", "person_duplicate_candidates.submission_id")
+      .innerJoin("forms", "forms.id", "form_submissions.form_id")
+      .select(({ fn }) => fn.count<number>("person_duplicate_candidates.id").as("count"))
+      .where("person_duplicate_candidates.status", "=", "pending")
+      .where(inScope)
       .executeTakeFirstOrThrow(),
   ]);
 
@@ -263,5 +300,59 @@ export async function getFormsAnalytics(): Promise<FormsAnalytics> {
     submissionsMonthly: fillMonthlySeries(new Map(monthRows.map((r) => [r.month, Number(r.count)]))),
     matchResultBreakdown: matchResultRows.map((r) => ({ nombre: MATCH_RESULT_LABEL[r.match_result] ?? r.match_result, valor: Number(r.count) })),
     pendingDuplicates: Number(pendingCount.count),
+  };
+}
+
+export interface DashboardCounts {
+  users: number;
+  people: number;
+  associations: number;
+  meetings: number;
+  invited: number;
+  confirmed: number;
+  submissions: number;
+}
+
+/** Totales del dashboard, calculados solo sobre lo accesible al usuario (mismo alcance que Visualización). */
+export async function getDashboardCounts(actor: SessionUser): Promise<DashboardCounts> {
+  const db = await getDb();
+  const meetingScope = orgScope(actor, "meetings.owner_organization_id");
+
+  const [users, people, associations, meetings, invited, confirmed, submissions] = await Promise.all([
+    listUsersInScope(actor).then((rows) => rows.length),
+    db.selectFrom("people").select(({ fn }) => fn.count<number>("id").as("count")).where(orgScope(actor, "people.organization_id")).executeTakeFirstOrThrow(),
+    db.selectFrom("associations").select(({ fn }) => fn.count<number>("id").as("count")).where(orgScope(actor, "associations.owner_organization_id")).executeTakeFirstOrThrow(),
+    db.selectFrom("meetings").select(({ fn }) => fn.count<number>("id").as("count")).where(meetingScope).executeTakeFirstOrThrow(),
+    db
+      .selectFrom("meeting_invitations")
+      .innerJoin("meetings", "meetings.id", "meeting_invitations.meeting_id")
+      .select(({ fn }) => fn.count<number>("meeting_invitations.id").as("count"))
+      .where("meeting_invitations.withdrawn_at", "is", null)
+      .where(meetingScope)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("meeting_invitations")
+      .innerJoin("meetings", "meetings.id", "meeting_invitations.meeting_id")
+      .select(({ fn }) => fn.count<number>("meeting_invitations.id").as("count"))
+      .where("meeting_invitations.withdrawn_at", "is", null)
+      .where("meeting_invitations.response_status", "=", "confirmed")
+      .where(meetingScope)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("form_submissions")
+      .innerJoin("forms", "forms.id", "form_submissions.form_id")
+      .select(({ fn }) => fn.count<number>("form_submissions.id").as("count"))
+      .where(orgScope(actor, "forms.owner_organization_id"))
+      .executeTakeFirstOrThrow(),
+  ]);
+
+  return {
+    users,
+    people: Number(people.count),
+    associations: Number(associations.count),
+    meetings: Number(meetings.count),
+    invited: Number(invited.count),
+    confirmed: Number(confirmed.count),
+    submissions: Number(submissions.count),
   };
 }

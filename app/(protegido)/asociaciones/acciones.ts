@@ -31,6 +31,7 @@ export async function createAssociationAction(
       name: String(formData.get("name") ?? ""),
       description: String(formData.get("description") ?? ""),
       typeId: String(formData.get("typeId") ?? ""),
+      ownerOrganizationId: String(formData.get("ownerOrganizationId") ?? ""),
     });
     createdId = result.id;
   } catch (err) {

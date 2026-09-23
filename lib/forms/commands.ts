@@ -1,19 +1,21 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import { toJsonb } from "../db/json.js";
 import type { SessionUser } from "../permissions/can.js";
+import { canAccessAssociation, canAccessForm } from "../scope/organizations.js";
+import { canActorOwnInOrganization } from "../organizations/ownership.js";
 import type { FormStatus } from "../db/schema.js";
 import { FIELD_TYPES, isCorePersonMapping, parseFieldOptions } from "./field-types.js";
 import { parseOptionsText, type FieldInput, type FormMetaInput } from "./schema.js";
 import type { FormVersionSchema } from "./version-schema.js";
+import { dniPublishError } from "./publish-rules.js";
 
 assertServerOnly("lib/forms/commands.ts");
 
 export class FormCommandError extends Error {}
 
-export async function createForm(actor: SessionUser, input: { name: string; slug: string }): Promise<{ id: string }> {
+export async function createForm(actor: SessionUser, input: { name: string; slug: string; ownerOrganizationId: string }): Promise<{ id: string }> {
   assertPermission(actor, "forms.create");
 
   const name = input.name.trim();
@@ -23,17 +25,20 @@ export async function createForm(actor: SessionUser, input: { name: string; slug
     throw new FormCommandError("El slug solo puede tener minúsculas, números y guiones.");
   }
 
+  if (!(await canActorOwnInOrganization(actor.id, input.ownerOrganizationId))) {
+    throw new FormCommandError("La unidad organizativa no existe, está inactiva o está fuera de tu alcance.");
+  }
+
   const db = await getDb();
   const existing = await db.selectFrom("forms").select("id").where("slug", "=", slug).executeTakeFirst();
   if (existing) throw new FormCommandError(`Ya existe un formulario con el slug "${slug}".`);
 
   const created = await db
     .insertInto("forms")
-    .values({ name, slug, created_by: actor.id, identification_policy: toJsonb({ matchFields: ["dni", "email", "phone"] }) })
+    .values({ name, slug, owner_organization_id: input.ownerOrganizationId, created_by: actor.id, identification_policy: toJsonb({ matchFields: ["dni", "email", "phone"] }) })
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  await writeAuditLog({ actorUserId: actor.id, action: "FORM_CREATED", entityType: "form", entityId: created.id, after: { name, slug } });
 
   return { id: created.id };
 }
@@ -42,7 +47,10 @@ function toDateOrNull(value: string | undefined | null): Date | null {
   return value ? new Date(value) : null;
 }
 
-async function requireEditableForm(formId: string): Promise<{ id: string; status: FormStatus }> {
+async function requireEditableForm(actor: SessionUser, formId: string): Promise<{ id: string; status: FormStatus }> {
+  // Un formulario fuera del alcance del usuario se trata como inexistente aunque se conozca su id.
+  if (!(await canAccessForm(actor, formId))) throw new FormCommandError("El formulario no existe.");
+
   const db = await getDb();
   const form = await db.selectFrom("forms").select(["id", "status"]).where("id", "=", formId).executeTakeFirst();
   if (!form) throw new FormCommandError("El formulario no existe.");
@@ -52,7 +60,7 @@ async function requireEditableForm(formId: string): Promise<{ id: string; status
 
 export async function updateFormMeta(actor: SessionUser, formId: string, input: FormMetaInput): Promise<void> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
 
   const db = await getDb();
   const slug = input.slug.trim().toLowerCase();
@@ -75,12 +83,11 @@ export async function updateFormMeta(actor: SessionUser, formId: string, input: 
     .where("id", "=", formId)
     .execute();
 
-  await writeAuditLog({ actorUserId: actor.id, action: "FORM_UPDATED", entityType: "form", entityId: formId, after: { name: input.name, slug } });
 }
 
 export async function upsertField(actor: SessionUser, formId: string, fieldId: string | null, input: FieldInput): Promise<{ id: string }> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
 
   if (input.personFieldMapping) {
     const mapping = input.personFieldMapping.trim();
@@ -144,7 +151,7 @@ export async function upsertField(actor: SessionUser, formId: string, fieldId: s
 
 export async function removeField(actor: SessionUser, formId: string, fieldId: string): Promise<void> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
 
   const db = await getDb();
   await db.deleteFrom("form_fields").where("id", "=", fieldId).where("form_id", "=", formId).execute();
@@ -152,7 +159,7 @@ export async function removeField(actor: SessionUser, formId: string, fieldId: s
 
 export async function reorderFields(actor: SessionUser, formId: string, orderedFieldIds: string[]): Promise<void> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
 
   const db = await getDb();
   await db.transaction().execute(async (trx) => {
@@ -164,7 +171,8 @@ export async function reorderFields(actor: SessionUser, formId: string, orderedF
 
 export async function addAssociationAction(actor: SessionUser, formId: string, associationId: string): Promise<{ id: string }> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
+  if (!(await canAccessAssociation(actor, associationId))) throw new FormCommandError("La asociación no existe.");
 
   const db = await getDb();
   const maxSort = await db
@@ -184,7 +192,7 @@ export async function addAssociationAction(actor: SessionUser, formId: string, a
 
 export async function removeAction(actor: SessionUser, formId: string, actionId: string): Promise<void> {
   assertPermission(actor, "forms.edit");
-  await requireEditableForm(formId);
+  await requireEditableForm(actor, formId);
 
   const db = await getDb();
   await db.deleteFrom("form_actions").where("id", "=", actionId).where("form_id", "=", formId).execute();
@@ -200,6 +208,8 @@ export async function removeAction(actor: SessionUser, formId: string, actionId:
 export async function publishForm(actor: SessionUser, formId: string): Promise<{ version: number }> {
   assertPermission(actor, "forms.publish");
 
+  if (!(await canAccessForm(actor, formId))) throw new FormCommandError("El formulario no existe.");
+
   const db = await getDb();
   const form = await db.selectFrom("forms").selectAll().where("id", "=", formId).executeTakeFirst();
   if (!form) throw new FormCommandError("El formulario no existe.");
@@ -212,6 +222,10 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
   if (!mappedKeys.has("first_name") || !mappedKeys.has("last_name")) {
     throw new FormCommandError("El formulario necesita un campo mapeado a Nombre y otro a Apellido antes de publicarse.");
   }
+
+  // Sin un campo DNI utilizable no se puede crear ninguna persona: se bloquea la publicación (el borrador sí se guarda).
+  const dniError = dniPublishError(fields.map((f) => ({ fieldType: f.field_type, required: f.required, visible: f.visible, personFieldMapping: f.person_field_mapping })));
+  if (dniError) throw new FormCommandError(dniError);
 
   const actions = await db.selectFrom("form_actions").selectAll().where("form_id", "=", formId).orderBy("sort_order", "asc").execute();
 
@@ -247,13 +261,14 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
     await trx.updateTable("forms").set({ status: "published", published_version: nextVersion, updated_at: new Date() }).where("id", "=", formId).execute();
   });
 
-  await writeAuditLog({ actorUserId: actor.id, action: "FORM_PUBLISHED", entityType: "form", entityId: formId, after: { version: nextVersion } });
 
   return { version: nextVersion };
 }
 
 export async function changeFormStatus(actor: SessionUser, formId: string, target: "unpublished" | "published" | "archived"): Promise<void> {
   assertPermission(actor, "forms.publish");
+
+  if (!(await canAccessForm(actor, formId))) throw new FormCommandError("El formulario no existe.");
 
   const db = await getDb();
   const form = await db.selectFrom("forms").select(["status", "published_version"]).where("id", "=", formId).executeTakeFirst();
@@ -267,9 +282,13 @@ export async function changeFormStatus(actor: SessionUser, formId: string, targe
     if (form.status !== "unpublished" || !form.published_version) {
       throw new FormCommandError("Solo se puede volver a publicar un formulario despublicado que ya tuvo una versión publicada. Usá \"Publicar\" para la primera vez.");
     }
+    // Volver a publicar reactiva la versión ya guardada: si es una versión anterior a esta regla (sin DNI válido), no se reactiva.
+    const version = await db.selectFrom("form_versions").select("schema").where("form_id", "=", formId).where("version", "=", form.published_version).executeTakeFirst();
+    const versionFields = ((version?.schema as unknown as FormVersionSchema | undefined)?.fields ?? []) as FormVersionSchema["fields"];
+    const versionDniError = dniPublishError(versionFields);
+    if (versionDniError) throw new FormCommandError(versionDniError);
   }
 
   await db.updateTable("forms").set({ status: target, updated_at: new Date() }).where("id", "=", formId).execute();
 
-  await writeAuditLog({ actorUserId: actor.id, action: "FORM_STATUS_CHANGED", entityType: "form", entityId: formId, before: { status: form.status }, after: { status: target } });
 }

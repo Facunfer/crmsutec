@@ -1,6 +1,5 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import { writeAuditLog } from "../audit/log.js";
 import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
 import { isPubliclyRespondable } from "./state-machine.js";
 import { hashInvitationToken } from "./tokens.js";
@@ -87,6 +86,9 @@ export async function getInvitationByToken(token: string, ip: string): Promise<I
     };
   }
 
+  // Las invitaciones públicas solo existen para reuniones con fecha y hora reales.
+  if (!row.starts_at || !row.ends_at) return { kind: "invalid" };
+
   return {
     kind: "ok",
     meetingName: row.meeting_name,
@@ -136,13 +138,6 @@ export async function respondToInvitation(
 
   await recordPublicLinkAttempt("invitation_respond", token, ip, true);
 
-  await writeAuditLog({
-    actorType: "public",
-    action: "INVITATION_RESPONDED",
-    entityType: "meeting",
-    entityId: row.meeting_id,
-    metadata: { response },
-  });
 
   return { ok: true };
 }

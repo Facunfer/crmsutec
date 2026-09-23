@@ -7,7 +7,6 @@ import { verifyPassword } from "@/lib/auth/passwords";
 import { checkLoginRateLimit, recordLoginAttempt } from "@/lib/auth/rate-limit";
 import { createSession } from "@/lib/auth/session";
 import { setSessionCookie } from "@/lib/auth/cookies";
-import { writeAuditLog } from "@/lib/audit/log";
 
 export interface LoginState {
   error?: string;
@@ -42,14 +41,6 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   if (!user || user.status !== "active") {
     await recordLoginAttempt(email, ip, false);
     if (user) {
-      await writeAuditLog({
-        actorUserId: user.id,
-        actorType: "public",
-        action: "LOGIN_FAILED",
-        entityType: "user",
-        entityId: user.id,
-        metadata: { ip, reason: "inactive" },
-      });
     }
     return { error: GENERIC_ERROR };
   }
@@ -57,28 +48,12 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   const validPassword = await verifyPassword(password, user.password_hash);
   if (!validPassword) {
     await recordLoginAttempt(email, ip, false);
-    await writeAuditLog({
-      actorUserId: user.id,
-      actorType: "user",
-      action: "LOGIN_FAILED",
-      entityType: "user",
-      entityId: user.id,
-      metadata: { ip, reason: "wrong_password" },
-    });
     return { error: GENERIC_ERROR };
   }
 
   await recordLoginAttempt(email, ip, true);
   const { token, expiresAt } = await createSession(user.id, { ip, userAgent });
   await setSessionCookie(token, expiresAt);
-  await writeAuditLog({
-    actorUserId: user.id,
-    actorType: "user",
-    action: "LOGIN_SUCCEEDED",
-    entityType: "user",
-    entityId: user.id,
-    metadata: { ip },
-  });
 
   redirect(user.must_change_password ? "/login/cambiar-contrasena" : "/dashboard");
 }

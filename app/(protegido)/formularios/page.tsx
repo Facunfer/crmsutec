@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { listForms } from "@/lib/forms/queries";
+import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
 import { CreateFormForm } from "./CreateFormForm";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -13,7 +14,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default async function FormulariosPage() {
   const actor = await requirePermission("forms.view");
-  const forms = await listForms();
+  const forms = await listForms(actor);
   const canCreate = can(actor, "forms.create");
   const canReview = can(actor, "forms.review_duplicates");
   const totalPending = forms.reduce((acc, f) => acc + f.pendingReviewCount, 0);
@@ -32,7 +33,7 @@ export default async function FormulariosPage() {
         ) : null}
       </div>
 
-      {canCreate ? <CreateFormForm /> : null}
+      {canCreate ? <CreateFormForm organizations={await listOwnerOrganizationOptions(actor.id)} /> : null}
 
       <div className="overflow-x-auto rounded-lg bg-white p-4 shadow-sm">
         <table className="min-w-full text-left text-sm">

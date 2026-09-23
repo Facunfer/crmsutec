@@ -30,7 +30,7 @@ export async function searchMemberCandidatesAction(
   if (term.trim().length < 2) {
     return { results: [], error: "Escribí al menos 2 caracteres para buscar." };
   }
-  const results = await searchPeopleToAdd(associationId, term, can(actor, "people.view_sensitive"));
+  const results = await searchPeopleToAdd(actor, associationId, term, can(actor, "people.view_sensitive"));
   return { results };
 }
 
@@ -67,12 +67,12 @@ export async function searchManagerCandidatesAction(
   _prev: SearchResult,
   formData: FormData
 ): Promise<SearchResult> {
-  await requireUser();
+  const actor = await requireUser();
   const term = String(formData.get("search") ?? "");
   if (term.trim().length < 2) {
     return { results: [], error: "Escribí al menos 2 caracteres para buscar." };
   }
-  const results = await searchAnyActivePeople(term);
+  const results = await searchAnyActivePeople(actor, term);
   return { results };
 }
 

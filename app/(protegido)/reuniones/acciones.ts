@@ -28,7 +28,10 @@ export async function createMeetingAction(
   let createdId: string;
   try {
     const input = parseMeetingForm(formData);
-    const result = await createMeeting(actor, input);
+    const result = await createMeeting(actor, {
+      ...input,
+      ownerOrganizationId: String(formData.get("ownerOrganizationId") ?? ""),
+    });
     createdId = result.id;
 
     const associationId = String(formData.get("associationId") ?? "");

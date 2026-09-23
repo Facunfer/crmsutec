@@ -6,13 +6,13 @@ import { BarChartCard } from "@/components/charts/BarChartCard";
 import { LineChartCard } from "@/components/charts/LineChartCard";
 
 export default async function VisualizacionPage() {
-  await requirePermission("visualization.view");
+  const actor = await requirePermission("visualization.view");
 
   const [people, associations, meetings, forms] = await Promise.all([
-    getPeopleAnalytics(),
-    getAssociationsAnalytics(),
-    getMeetingsAnalytics(),
-    getFormsAnalytics(),
+    getPeopleAnalytics(actor),
+    getAssociationsAnalytics(actor),
+    getMeetingsAnalytics(actor),
+    getFormsAnalytics(actor),
   ]);
 
   return (

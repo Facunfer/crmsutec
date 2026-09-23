@@ -1,7 +1,12 @@
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import type { FormStatus, PersonFieldType } from "../db/schema.js";
 import type { FormVersionSchema } from "./version-schema.js";
+import type { SessionUser } from "../permissions/can.js";
+import { canAccessForm, orgScope } from "../scope/organizations.js";
+import { can } from "../permissions/can.js";
+import { maskSubmissionPayload } from "./sensitive.js";
 
 assertServerOnly("lib/forms/queries.ts");
 
@@ -16,10 +21,12 @@ export interface FormListItem {
   createdAt: Date;
 }
 
-export async function listForms(): Promise<FormListItem[]> {
+/** Solo formularios cuya unidad propietaria está dentro del alcance del usuario. */
+export async function listForms(actor: SessionUser): Promise<FormListItem[]> {
   const db = await getDb();
   const rows = await db
     .selectFrom("forms")
+    .where(orgScope(actor, "forms.owner_organization_id"))
     .leftJoin("form_submissions", "form_submissions.form_id", "forms.id")
     .select([
       "forms.id",
@@ -57,6 +64,7 @@ export async function listForms(): Promise<FormListItem[]> {
 
 export interface FormDetail {
   id: string;
+  ownerOrganizationId: string;
   slug: string;
   name: string;
   status: FormStatus;
@@ -69,12 +77,16 @@ export interface FormDetail {
   publishedVersion: number | null;
 }
 
-export async function getFormById(id: string): Promise<FormDetail | null> {
+/** null si no existe O está fuera del alcance del usuario (no se distingue). */
+export async function getFormById(actor: SessionUser, id: string): Promise<FormDetail | null> {
+  if (!(await canAccessForm(actor, id))) return null;
+
   const db = await getDb();
   const row = await db.selectFrom("forms").selectAll().where("id", "=", id).executeTakeFirst();
   if (!row) return null;
   return {
     id: row.id,
+    ownerOrganizationId: row.owner_organization_id,
     slug: row.slug,
     name: row.name,
     status: row.status,
@@ -88,12 +100,14 @@ export async function getFormById(id: string): Promise<FormDetail | null> {
   };
 }
 
+/** Flujo público (`/f/[slug]`): sin sesión ni alcance; el visitante nunca elige ni ve la unidad. */
 export async function getFormBySlug(slug: string): Promise<FormDetail | null> {
   const db = await getDb();
   const row = await db.selectFrom("forms").selectAll().where("slug", "=", slug).executeTakeFirst();
   if (!row) return null;
   return {
     id: row.id,
+    ownerOrganizationId: row.owner_organization_id,
     slug: row.slug,
     name: row.name,
     status: row.status,
@@ -119,7 +133,9 @@ export interface FormFieldRow {
   personFieldMapping: string | null;
 }
 
-export async function listFormFields(formId: string): Promise<FormFieldRow[]> {
+export async function listFormFields(actor: SessionUser, formId: string): Promise<FormFieldRow[]> {
+  if (!(await canAccessForm(actor, formId))) return [];
+
   const db = await getDb();
   const rows = await db.selectFrom("form_fields").selectAll().where("form_id", "=", formId).orderBy("sort_order", "asc").execute();
   return rows.map((r) => ({
@@ -141,7 +157,9 @@ export interface FormActionRow {
   config: { associationId?: string };
 }
 
-export async function listFormActions(formId: string): Promise<FormActionRow[]> {
+export async function listFormActions(actor: SessionUser, formId: string): Promise<FormActionRow[]> {
+  if (!(await canAccessForm(actor, formId))) return [];
+
   const db = await getDb();
   const rows = await db.selectFrom("form_actions").selectAll().where("form_id", "=", formId).orderBy("sort_order", "asc").execute();
   return rows.map((r) => ({ id: r.id, actionType: r.action_type, config: (r.config ?? {}) as { associationId?: string } }));
@@ -171,8 +189,16 @@ export interface FormSubmissionRow {
   createdAt: Date;
 }
 
-export async function listSubmissions(formId: string): Promise<FormSubmissionRow[]> {
+/**
+ * Respuestas de un formulario del alcance del usuario. Sin `people.view_sensitive`,
+ * el payload sale ya enmascarado (DNI, email, teléfono y campos sensibles): la UI, el
+ * CSV y cualquier endpoint que use esto reciben solo valores enmascarados.
+ */
+export async function listSubmissions(actor: SessionUser, formId: string): Promise<FormSubmissionRow[]> {
+  if (!(await canAccessForm(actor, formId))) return [];
+
   const db = await getDb();
+  const canSeeSensitive = can(actor, "people.view_sensitive");
   const rows = await db
     .selectFrom("form_submissions")
     .leftJoin("people", "people.id", "form_submissions.person_id")
@@ -186,18 +212,36 @@ export async function listSubmissions(formId: string): Promise<FormSubmissionRow
       "form_submissions.created_at",
       "people.first_name",
       "people.last_name",
+      orgScope(actor, "people.organization_id").as("person_visible"),
     ])
     .where("form_submissions.form_id", "=", formId)
     .orderBy("form_submissions.created_at", "desc")
     .execute();
 
+  // Para enmascarar hace falta el esquema de la versión con que se envió cada respuesta.
+  let schemaByVersion = new Map<number, FormVersionSchema>();
+  let sensitiveCustomKeys = new Set<string>();
+  if (!canSeeSensitive && rows.length > 0) {
+    const versions = await db.selectFrom("form_versions").select(["version", "schema"]).where("form_id", "=", formId).execute();
+    schemaByVersion = new Map(versions.map((v) => [v.version, v.schema as unknown as FormVersionSchema]));
+    const definitions = await db.selectFrom("person_field_definitions").select("key").where("sensitive", "=", true).execute();
+    sensitiveCustomKeys = new Set(definitions.map((d) => d.key));
+  }
+
   return rows.map((r) => ({
     id: r.id,
     formVersion: r.form_version,
     matchResult: r.match_result,
-    personId: r.person_id,
-    personName: r.first_name ? `${r.first_name} ${r.last_name}` : null,
-    rawPayload: (r.raw_payload ?? {}) as Record<string, unknown>,
+    // Si la persona vinculada ya no está en el alcance del usuario (p. ej. se la trasladó), no se muestra.
+    personId: r.person_visible ? r.person_id : null,
+    personName: r.person_visible && r.first_name ? `${r.first_name} ${r.last_name}` : null,
+    rawPayload: canSeeSensitive
+      ? ((r.raw_payload ?? {}) as Record<string, unknown>)
+      : maskSubmissionPayload(
+          (r.raw_payload ?? {}) as Record<string, unknown>,
+          schemaByVersion.get(r.form_version) ?? null,
+          sensitiveCustomKeys
+        ),
     errorMessage: r.error_message,
     createdAt: r.created_at,
   }));
@@ -222,7 +266,7 @@ export interface DuplicateCandidateRow {
  * mismo criterio que el resto de la app: enmascarar es cosa del servidor,
  * nunca del componente (hallazgo real de la Etapa 10).
  */
-export async function listPendingDuplicateCandidates(canSeeSensitive: boolean): Promise<DuplicateCandidateRow[]> {
+export async function listPendingDuplicateCandidates(actor: SessionUser, canSeeSensitive: boolean): Promise<DuplicateCandidateRow[]> {
   const db = await getDb();
   const rows = await db
     .selectFrom("person_duplicate_candidates")
@@ -241,15 +285,19 @@ export async function listPendingDuplicateCandidates(canSeeSensitive: boolean): 
       "form_submissions.raw_payload",
       "forms.id as form_id",
       "forms.name as form_name",
+      orgScope(actor, "people.organization_id").as("person_visible"),
     ])
     .where("person_duplicate_candidates.status", "=", "pending")
+    // El candidato pertenece a la unidad del formulario que recibió el envío.
+    .where(orgScope(actor, "forms.owner_organization_id"))
     .orderBy("person_duplicate_candidates.created_at", "asc")
     .execute();
 
   return rows.map((r) => ({
     id: r.id,
-    personId: r.person_id,
-    personName: r.first_name ? `${r.first_name} ${r.last_name}` : null,
+    // La persona propuesta puede ser de otra unidad: no se revela quién es.
+    personId: r.person_visible ? r.person_id : null,
+    personName: r.person_visible && r.first_name ? `${r.first_name} ${r.last_name}` : null,
     submissionId: r.submission_id,
     formId: r.form_id,
     formName: r.form_name,
@@ -258,4 +306,24 @@ export async function listPendingDuplicateCandidates(canSeeSensitive: boolean): 
     rawPayload: canSeeSensitive ? ((r.raw_payload ?? null) as Record<string, unknown> | null) : null,
     createdAt: r.created_at,
   }));
+}
+
+/**
+ * Asociaciones que un formulario público puede ofrecer en un campo "asociación":
+ * solo las activas de la unidad propietaria del formulario y sus dependientes.
+ * El visitante no tiene sesión ni alcance, así que el alcance lo fija la
+ * unidad del formulario (configurada en el servidor), nunca lo que envíe.
+ */
+export async function listAssociationsForPublicForm(
+  ownerOrganizationId: string
+): Promise<Array<{ id: string; name: string }>> {
+  const db = await getDb();
+  const result = await sql<{ id: string; name: string }>`
+    select a.id, a.name
+    from associations a
+    where a.status = 'active'
+      and a.owner_organization_id in (select organization_id from organization_descendants(${ownerOrganizationId}::uuid))
+    order by a.name
+  `.execute(db);
+  return result.rows;
 }

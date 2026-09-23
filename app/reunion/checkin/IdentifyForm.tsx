@@ -7,8 +7,7 @@ const initialIdentifyState: IdentifyState = { kind: "idle" };
 const initialConfirmState: ConfirmState = { kind: "idle" };
 
 const IDENTIFY_MESSAGES: Record<string, string> = {
-  not_found: "No encontramos a nadie con esos datos. Revisá que estén bien escritos.",
-  not_invited: "Esa persona no está invitada a esta reunión. Acercate a la mesa de acreditación.",
+  not_found: "No pudimos acreditarte con esos datos. Revisá que estén bien escritos o acercate a la mesa de acreditación.",
   rate_limited: "Demasiados intentos. Esperá un momento y probá de nuevo.",
   no_session: "Esta sesión venció. Volvé a escanear el código QR.",
 };

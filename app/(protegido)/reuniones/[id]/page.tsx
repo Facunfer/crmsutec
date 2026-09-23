@@ -4,6 +4,8 @@ import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { getMeetingAssociationIds, getMeetingById } from "@/lib/meetings/queries";
 import { listInvitations } from "@/lib/meetings/invitations";
+import { listMeetingParticipants } from "@/lib/meetings/participants";
+import { formatMeetingWhen } from "@/lib/meetings/when";
 import { listAssociations } from "@/lib/associations/queries";
 import { listOrganizations } from "@/lib/organizations/queries";
 import { canEditCoreFields, canManageInvitations, MEETING_TRANSITIONS, STATUS_LABEL } from "@/lib/meetings/state-machine";
@@ -12,6 +14,7 @@ import { StatusActions } from "./StatusActions";
 import { AssociationsPicker } from "./AssociationsPicker";
 import { InvitationWizard } from "./InvitationWizard";
 import { InvitationsList } from "./InvitationsList";
+import { ParticipantsSection } from "./ParticipantsSection";
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", {
@@ -25,19 +28,22 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
   const actor = await requirePermission("meetings.view");
   const { id } = await params;
 
-  const meeting = await getMeetingById(id);
+  const meeting = await getMeetingById(actor, id);
   if (!meeting) notFound();
 
-  const [associations, organizations, associationIds, invitations] = await Promise.all([
-    listAssociations(),
+  const [associations, organizations, associationIds, invitations, participants] = await Promise.all([
+    listAssociations(actor),
     listOrganizations(),
-    getMeetingAssociationIds(id),
-    listInvitations(id),
+    getMeetingAssociationIds(actor, id),
+    listInvitations(actor, id),
+    listMeetingParticipants(actor, id),
   ]);
+  // Un usuario de un área que ve la reunión solo por tener participantes suyos la mira en modo lectura.
+  const isOwner = meeting.accessLevel === "owner";
 
-  const canEdit = can(actor, "meetings.edit");
-  const canChangeStatus = can(actor, "meetings.change_status");
-  const canManageInv = can(actor, "meetings.manage_invitations");
+  const canEdit = isOwner && can(actor, "meetings.edit");
+  const canChangeStatus = isOwner && can(actor, "meetings.change_status");
+  const canManageInv = isOwner && can(actor, "meetings.manage_invitations");
 
   const availableTransitions = canChangeStatus ? MEETING_TRANSITIONS[meeting.status] : [];
 
@@ -47,12 +53,12 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
         <div>
           <h1 className="text-xl font-semibold text-brand-900">{meeting.name}</h1>
           <p className="text-sm text-brand-400">
-            {formatDateTime(meeting.startsAt)} – {formatDateTime(meeting.endsAt)} · organiza {meeting.organizerName ?? "—"}
+            {formatMeetingWhen(meeting, { withEnd: true })} · organiza {meeting.organizerName ?? "—"}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-brand-100 px-3 py-1 text-xs text-brand-700">{STATUS_LABEL[meeting.displayStatus]}</span>
-          {meeting.status !== "draft" ? (
+          {isOwner && meeting.status !== "draft" ? (
             <Link href={`/reuniones/${id}/asistencia`} className="rounded-md border border-brand-200 px-3 py-1.5 text-sm text-brand-700 hover:bg-brand-50">
               QR y asistencia
             </Link>
@@ -60,6 +66,8 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
           <StatusActions meetingId={id} availableTransitions={availableTransitions} />
         </div>
       </div>
+
+      <ParticipantsSection participants={participants} />
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos</h2>

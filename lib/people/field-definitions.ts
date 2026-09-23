@@ -1,7 +1,6 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import { toJsonb } from "../db/json.js";
 import type { SessionUser } from "../permissions/can.js";
 import type { PersonFieldType } from "../db/schema.js";
@@ -46,6 +45,10 @@ export async function listFieldDefinitions(options: { onlyActive?: boolean } = {
   }));
 }
 
+/**
+ * Uso INTERNO (ya no hay pantalla de "campos personalizados"): una definición existe solo para que un campo de
+ * Formulario pueda escribir en `people.custom_fields`. Se exige `forms.edit`.
+ */
 export interface FieldDefinitionInput {
   key: string;
   label: string;
@@ -58,7 +61,7 @@ export interface FieldDefinitionInput {
 const KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 export async function createFieldDefinition(actor: SessionUser, input: FieldDefinitionInput): Promise<{ id: string }> {
-  assertPermission(actor, "people.manage_custom_fields");
+  assertPermission(actor, "forms.edit");
 
   const key = input.key.trim();
   if (!KEY_PATTERN.test(key)) {
@@ -90,34 +93,6 @@ export async function createFieldDefinition(actor: SessionUser, input: FieldDefi
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "PERSON_FIELD_DEFINITION_CREATED",
-    entityType: "person_field_definition",
-    entityId: created.id,
-    after: { key, label, field_type: input.fieldType },
-  });
 
   return { id: created.id };
-}
-
-export async function setFieldDefinitionActive(actor: SessionUser, id: string, active: boolean): Promise<void> {
-  assertPermission(actor, "people.manage_custom_fields");
-
-  const db = await getDb();
-  const updated = await db
-    .updateTable("person_field_definitions")
-    .set({ active })
-    .where("id", "=", id)
-    .returning("key")
-    .executeTakeFirst();
-  if (!updated) throw new FieldDefinitionError("El campo no existe.");
-
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: active ? "PERSON_FIELD_DEFINITION_ACTIVATED" : "PERSON_FIELD_DEFINITION_DEACTIVATED",
-    entityType: "person_field_definition",
-    entityId: id,
-    after: { key: updated.key, active },
-  });
 }

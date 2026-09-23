@@ -2,12 +2,13 @@
 
 import { useActionState, type ReactNode } from "react";
 import type { FormVersionField } from "@/lib/forms/version-schema";
-import type { AssociationListItem } from "@/lib/associations/queries";
+/** Solo lo mínimo que un visitante público necesita para elegir una asociación. */
+type PublicAssociationOption = { id: string; name: string };
 import { submitFormAction, type SubmitFormState } from "./actions";
 
 const initialState: SubmitFormState = { status: "idle" };
 
-function Field({ field, error, associations }: { field: FormVersionField; error?: string; associations: AssociationListItem[] }) {
+function Field({ field, error, associations }: { field: FormVersionField; error?: string; associations: PublicAssociationOption[] }) {
   const base = "mt-1 w-full rounded-md border border-brand-200 px-3 py-2 text-base";
   const label = (
     <label className="block text-sm font-medium text-brand-900">
@@ -103,7 +104,7 @@ export function FormRenderer({
   name: string;
   consentText: string | null;
   fields: FormVersionField[];
-  associations: AssociationListItem[];
+  associations: PublicAssociationOption[];
 }) {
   const [state, dispatch, pending] = useActionState(submitFormAction.bind(null, slug, idempotencyKey), initialState);
 

@@ -1,11 +1,18 @@
 "use client";
 
 import { useActionState } from "react";
+import type { OrganizationOption } from "@/lib/organizations/queries";
 import { createMeetingAction, type MeetingActionResult } from "./acciones";
 
 const initialState: MeetingActionResult = { ok: false };
 
-export function CreateMeetingForm({ preselectedAssociationId }: { preselectedAssociationId?: string }) {
+export function CreateMeetingForm({
+  preselectedAssociationId,
+  organizations,
+}: {
+  preselectedAssociationId?: string;
+  organizations: OrganizationOption[];
+}) {
   const [state, formAction, pending] = useActionState(createMeetingAction, initialState);
 
   return (
@@ -14,6 +21,16 @@ export function CreateMeetingForm({ preselectedAssociationId }: { preselectedAss
       <div>
         <label className="block text-xs text-brand-500">Nombre *</label>
         <input name="name" required className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label className="block text-xs text-brand-500">Unidad organizativa *</label>
+        <select name="ownerOrganizationId" required className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm">
+          {organizations.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>

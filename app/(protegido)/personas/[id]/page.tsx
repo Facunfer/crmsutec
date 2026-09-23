@@ -6,11 +6,14 @@ import {
   getPersonById,
   getPersonFormSubmissions,
   getPersonMeetingActivity,
+  getPersonTraffic,
 } from "@/lib/people/queries";
+import { TrafficBadge } from "../TrafficBadge";
 import { applyMasking } from "@/lib/people/masking";
+import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
 import { listActiveOrganizationOptions } from "@/lib/organizations/queries";
-import { listRecentAuditForEntity } from "@/lib/audit/queries";
 import { PersonForm, type PersonFormInitialValues } from "../PersonForm";
+import { TransferPanel } from "./TransferPanel";
 import { updatePersonAction } from "../acciones";
 import { PersonActions } from "./PersonActions";
 
@@ -37,22 +40,24 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const actor = await requirePermission("people.view");
   const { id } = await params;
 
-  const person = await getPersonById(id);
+  const person = await getPersonById(actor, id);
   if (!person) notFound();
 
   const canSeeSensitive = can(actor, "people.view_sensitive");
   const masked = applyMasking(person, canSeeSensitive);
   const { age, estimated } = computeDisplayAge(person);
 
-  const [organizations, meetingActivity, formSubmissions, auditEntries] = await Promise.all([
-    listActiveOrganizationOptions(),
-    getPersonMeetingActivity(id),
-    getPersonFormSubmissions(id),
-    can(actor, "audit.view") ? listRecentAuditForEntity("person", id) : Promise.resolve([]),
+  const [orgTree, allOrganizations, meetingActivity, formSubmissions, traffic] = await Promise.all([
+    listOrgTreeOptions(actor),
+    can(actor, "people.transfer") ? listActiveOrganizationOptions() : Promise.resolve([]),
+    getPersonMeetingActivity(actor, id),
+    getPersonFormSubmissions(actor, id),
+    getPersonTraffic(actor, id),
   ]);
+  const areas = await listAreaOptions(actor, orgTree);
 
-  const attendedCount = meetingActivity.filter((m) => m.attendanceStatus === "attended").length;
-  const finishedInvitations = meetingActivity.length;
+  const attendedCount = meetingActivity.filter((m) => m.invited && m.attendanceStatus === "attended").length;
+  const finishedInvitations = meetingActivity.filter((m) => m.invited && ["attended", "absent"].includes(m.attendanceStatus)).length;
   const attendanceRate = finishedInvitations > 0 ? Math.round((attendedCount / finishedInvitations) * 100) : null;
 
   const initialValues: PersonFormInitialValues = {
@@ -82,16 +87,36 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
             Alta {formatDate(person.createdAt)} · origen: {person.origin} ·{" "}
             {person.status === "active" ? "activa" : person.status === "inactive" ? "inactiva" : "fusionada"}
           </p>
+          <p className="mt-1 text-sm text-brand-700">
+            {person.areaName ?? "Sin área"} · {person.reparticionName ?? "Sin repartición específica"}
+          </p>
+          {traffic ? (
+            <p className="mt-1 flex items-center gap-2 text-sm text-brand-700">
+              <TrafficBadge light={traffic.trafficLight} />
+              <span>
+                {traffic.lastInteractionDate
+                  ? `Última interacción: ${traffic.lastInteractionDate} (hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
+                  : "Nunca interactuamos"}
+              </span>
+            </p>
+          ) : null}
         </div>
         {can(actor, "people.deactivate") ? (
           <PersonActions personId={id} active={person.status === "active"} />
         ) : null}
       </div>
 
+      {person.organizationId && can(actor, "people.transfer") ? (
+        <section className="rounded-lg bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold text-brand-900">Traslado de repartición</h2>
+          <TransferPanel personId={id} currentOrganizationId={person.organizationId} destinations={allOrganizations} />
+        </section>
+      ) : null}
+
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos personales e información organizacional</h2>
         {can(actor, "people.edit") ? (
-          <PersonForm action={boundUpdateAction} organizations={organizations} initialValues={initialValues} canEditSensitive={canSeeSensitive} />
+          <PersonForm action={boundUpdateAction} areas={areas} orgTree={orgTree} lockOrganization initialValues={initialValues} canEditSensitive={canSeeSensitive} />
         ) : (
           <dl className="grid grid-cols-2 gap-2 text-sm">
             <dt className="text-brand-400">DNI</dt>
@@ -100,8 +125,10 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
             <dd>{masked.email ?? "—"}</dd>
             <dt className="text-brand-400">Teléfono</dt>
             <dd>{masked.phone ?? "—"}</dd>
-            <dt className="text-brand-400">Organismo</dt>
-            <dd>{masked.organizationName ?? "—"}</dd>
+            <dt className="text-brand-400">Área</dt>
+            <dd>{person.areaName ?? "—"}</dd>
+            <dt className="text-brand-400">Repartición</dt>
+            <dd>{person.reparticionName ?? "—"}</dd>
             <dt className="text-brand-400">Edad</dt>
             <dd>
               {age ?? "—"} {estimated ? "(estimada)" : ""}
@@ -113,7 +140,7 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Actividad</h2>
         <div className="mb-3 flex gap-6 text-sm text-brand-700">
-          <span>{meetingActivity.length} invitación(es) a reuniones</span>
+          <span>{meetingActivity.length} actividad(es)</span>
           <span>{formSubmissions.length} formulario(s) completados</span>
           {attendanceRate !== null ? <span>{attendanceRate}% de asistencia</span> : null}
         </div>
@@ -126,23 +153,23 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
                 <th className="py-1.5 pr-4">Fecha</th>
                 <th className="py-1.5 pr-4">Invitado</th>
                 <th className="py-1.5 pr-4">Confirmó</th>
-                <th className="py-1.5 pr-4">Asistió</th>
+                <th className="py-1.5 pr-4">Estado</th>
               </tr>
             </thead>
             <tbody>
               {meetingActivity.map((m) => (
                 <tr key={m.meetingId} className="border-b border-brand-50">
                   <td className="py-1.5 pr-4">{m.meetingName}</td>
-                  <td className="py-1.5 pr-4">{formatDate(m.startsAt)}</td>
-                  <td className="py-1.5 pr-4">sí</td>
+                  <td className="py-1.5 pr-4">{m.startsAt ? new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeZone: "America/Argentina/Buenos_Aires", ...(m.datePrecision === "exact_datetime" ? { timeStyle: "short" as const } : {}) }).format(m.startsAt) : "Fecha pendiente"}</td>
+                  <td className="py-1.5 pr-4">{m.invited ? "sí" : "—"}</td>
                   <td className="py-1.5 pr-4">{RESPONSE_LABEL[m.responseStatus] ?? m.responseStatus}</td>
-                  <td className="py-1.5 pr-4">{ATTENDANCE_LABEL[m.attendanceStatus] ?? m.attendanceStatus}</td>
+                  <td className="py-1.5 pr-4">{m.statusLabel}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p className="mb-4 text-sm text-brand-400">Todavía no fue invitada a ninguna reunión.</p>
+          <p className="mb-4 text-sm text-brand-400">Todavía no tiene actividades registradas.</p>
         )}
 
         {formSubmissions.length === 0 ? (
@@ -157,24 +184,6 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
           </ul>
         )}
       </section>
-
-      {can(actor, "audit.view") ? (
-        <section className="rounded-lg bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-semibold text-brand-900">Últimas acciones de auditoría</h2>
-          {auditEntries.length === 0 ? (
-            <p className="text-sm text-brand-400">Sin acciones registradas.</p>
-          ) : (
-            <ul className="space-y-1 text-sm">
-              {auditEntries.map((entry) => (
-                <li key={entry.id} className="text-brand-700">
-                  <span className="font-mono text-xs text-brand-400">{formatDateTime(entry.createdAt)}</span>{" "}
-                  {entry.action}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
     </div>
   );
 }

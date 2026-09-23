@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import { getPublicForm } from "@/lib/forms/submit";
-import { listAssociations } from "@/lib/associations/queries";
+import { listAssociationsForPublicForm } from "@/lib/forms/queries";
 import { FormRenderer } from "./FormRenderer";
 
 export const metadata: Metadata = {
@@ -27,7 +27,8 @@ export default async function PublicFormPage({ params }: { params: Promise<{ slu
   }
 
   const needsAssociations = result.schema.fields.some((f) => f.visible && f.fieldType === "association");
-  const associations = needsAssociations ? (await listAssociations()).filter((a) => a.status === "active") : [];
+  // El alcance lo fija la unidad del formulario (servidor): el visitante no la elige ni la ve.
+  const associations = needsAssociations ? await listAssociationsForPublicForm(result.ownerOrganizationId) : [];
 
   return (
     <main className="mx-auto min-h-screen max-w-lg px-4 py-8">

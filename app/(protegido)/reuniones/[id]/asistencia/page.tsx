@@ -14,8 +14,9 @@ export default async function AsistenciaPage({ params }: { params: Promise<{ id:
   const actor = await requirePermission("meetings.view");
   const { id } = await params;
 
-  const meeting = await getMeetingById(id);
-  if (!meeting) notFound();
+  const meeting = await getMeetingById(actor, id);
+  // El QR y el check-in son de la unidad propietaria: quien solo ve la reunión por tener participantes suyos no opera sobre ella.
+  if (!meeting || meeting.accessLevel !== "owner") notFound();
 
   const canChangeStatus = can(actor, "meetings.change_status");
   const availableTransitions = canChangeStatus ? MEETING_TRANSITIONS[meeting.status] : [];

@@ -1,41 +1,18 @@
 import { requirePermission } from "@/lib/auth/guard";
-import { getDb } from "@/lib/db/client";
+import { getDashboardCounts } from "@/lib/analytics/queries";
 
 export default async function DashboardPage() {
-  await requirePermission("dashboard.view");
+  const actor = await requirePermission("dashboard.view");
 
-  const db = await getDb();
-  const { count: userCount } = await db
-    .selectFrom("users")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .executeTakeFirstOrThrow();
-  const { count: peopleCount } = await db
-    .selectFrom("people")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .executeTakeFirstOrThrow();
-  const { count: associationCount } = await db
-    .selectFrom("associations")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .executeTakeFirstOrThrow();
-  const { count: meetingCount } = await db
-    .selectFrom("meetings")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .executeTakeFirstOrThrow();
-  const { count: invitedCount } = await db
-    .selectFrom("meeting_invitations")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .where("withdrawn_at", "is", null)
-    .executeTakeFirstOrThrow();
-  const { count: confirmedCount } = await db
-    .selectFrom("meeting_invitations")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .where("withdrawn_at", "is", null)
-    .where("response_status", "=", "confirmed")
-    .executeTakeFirstOrThrow();
-  const { count: submissionCount } = await db
-    .selectFrom("form_submissions")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .executeTakeFirstOrThrow();
+  // Solo lo accesible al usuario (mismo alcance que Visualización).
+  const counts = await getDashboardCounts(actor);
+  const userCount = counts.users;
+  const peopleCount = counts.people;
+  const associationCount = counts.associations;
+  const meetingCount = counts.meetings;
+  const invitedCount = counts.invited;
+  const confirmedCount = counts.confirmed;
+  const submissionCount = counts.submissions;
 
   return (
     <div>

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useActionState, useRef } from "react";
-import type { OrganizationOption } from "@/lib/organizations/queries";
+import { AreaReparticionSelect } from "@/components/organizations/AreaReparticionSelect";
+import type { AreaOption, OrgTreeOption } from "@/lib/organizations/areas";
 import type { PersonActionResult } from "./acciones";
 
 const initialState: PersonActionResult = { ok: false };
@@ -31,13 +32,18 @@ const EMPTY_VALUES: PersonFormInitialValues = {
 
 export function PersonForm({
   action,
-  organizations,
+  areas,
+  orgTree,
+  lockOrganization = false,
   initialValues = EMPTY_VALUES,
   submitLabel = "Guardar",
   canEditSensitive = true,
 }: {
   action: (prevState: PersonActionResult, formData: FormData) => Promise<PersonActionResult>;
-  organizations: OrganizationOption[];
+  areas: AreaOption[];
+  orgTree: OrgTreeOption[];
+  /** En la edición el Área/Repartición se muestran pero no se cambian: un cambio es un traslado (deja historial). */
+  lockOrganization?: boolean;
   initialValues?: PersonFormInitialValues;
   submitLabel?: string;
   /** Sin people.view_sensitive no se puede ver DNI/email/teléfono, así que tampoco se editan a ciegas (el servidor los ignora igual, esto es solo para no confundir con campos que parecen editables y no lo son). */
@@ -70,9 +76,11 @@ export function PersonForm({
           />
         </div>
         <div>
-          <label className="block text-xs text-brand-500">DNI</label>
+          <label className="block text-xs text-brand-500">DNI *</label>
           <input
             name="dni"
+            required={canEditSensitive}
+            inputMode="numeric"
             defaultValue={initialValues.dni}
             disabled={!canEditSensitive}
             className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm disabled:bg-brand-50 disabled:text-brand-400"
@@ -103,21 +111,17 @@ export function PersonForm({
             DNI, email y teléfono están enmascarados y no se pueden editar sin el permiso para ver datos sensibles.
           </p>
         ) : null}
-        <div>
-          <label className="block text-xs text-brand-500">Organismo</label>
-          <select
-            name="organizationId"
-            defaultValue={initialValues.organizationId}
-            className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
-          >
-            <option value="">— sin especificar —</option>
-            {organizations.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <AreaReparticionSelect
+          areas={areas}
+          tree={orgTree}
+          initialOrganizationId={initialValues.organizationId}
+          disabled={lockOrganization}
+        />
+        {lockOrganization ? (
+          <p className="col-span-2 text-xs text-brand-400">
+            El Área y la Repartición no se cambian desde la edición: usá «Traslado de repartición» (queda historial).
+          </p>
+        ) : null}
         <div>
           <label className="block text-xs text-brand-500">Fecha de nacimiento</label>
           <input

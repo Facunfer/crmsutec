@@ -11,6 +11,7 @@ import {
   updatePerson,
   type DuplicateWarning,
 } from "@/lib/people/commands";
+import { assignInitialOrganization, transferPerson } from "@/lib/people/transfers";
 import { parsePersonForm } from "@/lib/people/schema";
 import { listAllMatchingIds, type PeopleFilterSpec } from "@/lib/people/queries";
 import { bulkAddMembers } from "@/lib/associations/members";
@@ -101,6 +102,49 @@ export async function setPersonActiveAction(
   }
 }
 
+export interface TransferActionResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** El traslado y la asignación inicial van por las funciones SQL de la migración 0015 (historial + validaciones). */
+export async function transferPersonAction(
+  personId: string,
+  _prev: TransferActionResult,
+  formData: FormData
+): Promise<TransferActionResult> {
+  const actor = await requireUser();
+  try {
+    await transferPerson(
+      actor,
+      personId,
+      String(formData.get("organizationId") ?? ""),
+      String(formData.get("reason") ?? "")
+    );
+    revalidatePath("/personas");
+    revalidatePath(`/personas/${personId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof PersonCommandError ? err.message : "No se pudo trasladar." };
+  }
+}
+
+export async function assignInitialOrganizationAction(
+  personId: string,
+  _prev: TransferActionResult,
+  formData: FormData
+): Promise<TransferActionResult> {
+  const actor = await requireUser();
+  try {
+    await assignInitialOrganization(actor, personId, String(formData.get("organizationId") ?? ""));
+    revalidatePath("/personas");
+    revalidatePath(`/personas/${personId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof PersonCommandError ? err.message : "No se pudo asignar la unidad." };
+  }
+}
+
 export type BulkSelection = { mode: "ids"; ids: string[] } | { mode: "filter"; filter: PeopleFilterSpec };
 
 export async function bulkSetActiveAction(
@@ -109,7 +153,7 @@ export async function bulkSetActiveAction(
 ): Promise<{ ok: boolean; error?: string; count?: number }> {
   const actor = await requireUser();
   try {
-    const ids = selection.mode === "ids" ? selection.ids : await listAllMatchingIds(selection.filter);
+    const ids = selection.mode === "ids" ? selection.ids : await listAllMatchingIds(actor, selection.filter);
     const count = await bulkSetActive(actor, ids, active);
     revalidatePath("/personas");
     return { ok: true, count };
@@ -125,7 +169,7 @@ export async function bulkAddToAssociationAction(
 ): Promise<{ ok: boolean; error?: string; count?: number }> {
   const actor = await requireUser();
   try {
-    const ids = selection.mode === "ids" ? selection.ids : await listAllMatchingIds(selection.filter);
+    const ids = selection.mode === "ids" ? selection.ids : await listAllMatchingIds(actor, selection.filter);
     const count = await bulkAddMembers(actor, associationId, ids);
     revalidatePath("/personas");
     revalidatePath(`/asociaciones/${associationId}`);

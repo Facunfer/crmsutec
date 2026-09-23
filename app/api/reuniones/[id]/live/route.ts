@@ -13,10 +13,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const search = request.nextUrl.searchParams.get("q");
 
   if (search) {
-    const results = await quickSearchForAccreditation(id, search);
+    const results = await quickSearchForAccreditation(user, id, search);
     return Response.json({ results });
   }
 
-  const data = await getLivePanelData(id);
+  const data = await getLivePanelData(user, id);
+  if (!data) return new Response("La reunión no existe.", { status: 404 });
   return Response.json(data);
 }

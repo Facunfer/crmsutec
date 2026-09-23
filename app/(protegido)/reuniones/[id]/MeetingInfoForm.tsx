@@ -23,8 +23,9 @@ export function MeetingInfoForm({
   meetingId: string;
   name: string;
   description: string;
-  startsAt: Date;
-  endsAt: Date;
+  /** null en actividades importadas sin horario real: el formulario queda vacío, nunca con una hora inventada. */
+  startsAt: Date | null;
+  endsAt: Date | null;
   locationName: string;
   address: string;
   notes: string;
@@ -37,13 +38,16 @@ export function MeetingInfoForm({
         <label className="block text-xs text-brand-500">Nombre *</label>
         <input name="name" defaultValue={name} required className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
       </div>
+      {!startsAt || !endsAt ? (
+        <p className="text-xs text-brand-500">El horario de esta actividad no está registrado. Completá inicio y fin reales para guardarlo.</p>
+      ) : null}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs text-brand-500">Inicio *</label>
           <input
             name="startsAt"
             type="datetime-local"
-            defaultValue={toLocalInputValue(startsAt)}
+            defaultValue={startsAt ? toLocalInputValue(startsAt) : ""}
             required
             className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
           />
@@ -53,7 +57,7 @@ export function MeetingInfoForm({
           <input
             name="endsAt"
             type="datetime-local"
-            defaultValue={toLocalInputValue(endsAt)}
+            defaultValue={endsAt ? toLocalInputValue(endsAt) : ""}
             required
             className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
           />

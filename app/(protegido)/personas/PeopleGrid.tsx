@@ -5,7 +5,9 @@ import { useMemo, useState } from "react";
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { DataGrid } from "@/components/grid/DataGrid";
 import type { PeopleFilterSpec, PeopleSort } from "@/lib/people/queries";
+import type { TrafficLight } from "@/lib/people/traffic";
 import { bulkAddToAssociationAction, bulkSetActiveAction } from "./acciones";
+import { TrafficBadge } from "./TrafficBadge";
 
 export interface PersonDisplayRow {
   id: string;
@@ -14,10 +16,17 @@ export interface PersonDisplayRow {
   dni: string | null;
   email: string | null;
   phone: string | null;
-  organizationName: string | null;
-  age: number | null;
-  ageEstimated: boolean;
+  /** Área (jurisdicción principal) y Repartición (unidad específica; null si solo se conoce el Área). */
+  areaName: string | null;
+  reparticionName: string | null;
+  lastInteractionDate: string | null;
+  daysSinceInteraction: number | null;
+  trafficLight: TrafficLight;
   status: "active" | "inactive" | "merged";
+}
+
+function TrafficCell(props: ICellRendererParams<PersonDisplayRow>) {
+  return props.data ? <TrafficBadge light={props.data.trafficLight} /> : null;
 }
 
 function FichaLinkCell(props: ICellRendererParams<PersonDisplayRow>) {
@@ -65,32 +74,36 @@ export function PeopleGrid({
 
   const columnDefs = useMemo<ColDef<PersonDisplayRow>[]>(
     () => [
-      { field: "lastName", headerName: "Apellido", sortable: false, filter: false, flex: 1 },
-      { field: "firstName", headerName: "Nombre", sortable: false, filter: false, flex: 1 },
-      { field: "dni", headerName: "DNI", sortable: false, filter: false, width: 130 },
+      { headerName: "Nombre", sortable: false, filter: false, flex: 1.2, valueGetter: (p) => (p.data ? `${p.data.lastName}, ${p.data.firstName}` : "") },
+      { field: "dni", headerName: "DNI", sortable: false, filter: false, width: 120 },
+      { field: "areaName", headerName: "Área", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },
+      { field: "reparticionName", headerName: "Repartición", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },
+      { field: "phone", headerName: "Teléfono", sortable: false, filter: false, width: 140 },
       { field: "email", headerName: "Email", sortable: false, filter: false, flex: 1 },
-      { field: "phone", headerName: "Teléfono", sortable: false, filter: false, width: 150 },
-      { field: "organizationName", headerName: "Organismo", sortable: false, filter: false, flex: 1 },
       {
-        field: "age",
-        headerName: "Edad",
+        field: "lastInteractionDate",
+        headerName: "Última interacción",
         sortable: false,
         filter: false,
-        width: 90,
-        valueFormatter: (p) => (p.value === null || p.value === undefined ? "" : String(p.value)),
+        width: 190,
+        valueGetter: (p) =>
+          p.data?.lastInteractionDate
+            ? `${p.data.lastInteractionDate.split("-").reverse().join("/")} (${p.data.daysSinceInteraction} d)`
+            : "Nunca",
       },
+      { headerName: "Semáforo", width: 110, sortable: false, filter: false, cellRenderer: TrafficCell },
       {
         field: "status",
         headerName: "Estado",
         sortable: false,
         filter: false,
-        width: 110,
-        valueFormatter: (p) =>
-          p.value === "active" ? "Activa" : p.value === "inactive" ? "Inactiva" : "Fusionada",
+        width: 100,
+        hide: filter.status === undefined || filter.status === "active",
+        valueFormatter: (p) => (p.value === "active" ? "Activa" : p.value === "inactive" ? "Inactiva" : "Fusionada"),
       },
       { headerName: "", width: 90, sortable: false, filter: false, cellRenderer: FichaLinkCell },
     ],
-    []
+    [filter.status]
   );
 
   function sortHref(field: PeopleSort["field"]) {

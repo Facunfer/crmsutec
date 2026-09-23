@@ -1,7 +1,8 @@
 import { getDb } from "../db/client.js";
+import { syncParticipationInteractions } from "../interactions/participation-sync.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
+import { canAccessMeeting } from "../scope/organizations.js";
 import type { SessionUser } from "../permissions/can.js";
 
 assertServerOnly("lib/attendance/manual.ts");
@@ -24,6 +25,10 @@ export async function setAttendanceManually(
   reason: string
 ): Promise<void> {
   assertPermission(actor, "meetings.attendance_manual");
+
+  if (!(await canAccessMeeting(actor, meetingId))) {
+    throw new ManualAttendanceError("La reunión no existe.");
+  }
 
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
@@ -69,15 +74,8 @@ export async function setAttendanceManually(
       .set({ attendance_status: attendanceStatus })
       .where("id", "=", invitation.id)
       .execute();
+    // Misma transacción: la interacción (o su anulación si se corrige a «ausente») nunca queda desfasada de la asistencia.
+    await syncParticipationInteractions(trx, { meetingId, personId, actorUserId: actor.id });
   });
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ATTENDANCE_MANUAL",
-    entityType: "meeting",
-    entityId: meetingId,
-    before: { person_id: personId, attendance_status: invitation.attendance_status, had_checkin_record: !!existingCheckin },
-    after: { attendance_status: attendanceStatus },
-    metadata: { reason: trimmedReason },
-  });
 }

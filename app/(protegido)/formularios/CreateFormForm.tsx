@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import type { OrganizationOption } from "@/lib/organizations/queries";
 import { createFormAction, type ActionResult } from "./acciones";
 
 const initialState: ActionResult = { ok: false };
@@ -15,7 +16,7 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function CreateFormForm() {
+export function CreateFormForm({ organizations }: { organizations: OrganizationOption[] }) {
   const [state, dispatch, pending] = useActionState(createFormAction, initialState);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -35,6 +36,16 @@ export function CreateFormForm() {
           }}
           className="mt-1 w-64 rounded-md border border-brand-200 px-2 py-1.5 text-sm"
         />
+      </div>
+      <div>
+        <label className="block text-xs text-brand-500">Unidad organizativa</label>
+        <select name="ownerOrganizationId" required className="mt-1 rounded-md border border-brand-200 px-2 py-1.5 text-sm">
+          {organizations.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
       <div>
         <label className="block text-xs text-brand-500">Slug (URL pública: /f/…)</label>

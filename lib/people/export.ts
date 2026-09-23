@@ -1,14 +1,15 @@
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import { can, type SessionUser } from "../permissions/can.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { Json } from "../db/schema.js";
 import { applyMasking } from "./masking.js";
 import { computeDisplayAge, listAllMatching, type PeopleFilterSpec, type PeopleSort } from "./queries.js";
 
 assertServerOnly("lib/people/export.ts");
 
-const CSV_HEADER = ["Nombre", "Apellido", "DNI", "Email", "Teléfono", "Organismo", "Edad", "Estado", "Alta"];
+const CSV_HEADER = ["Nombre", "Apellido", "DNI", "Email", "Teléfono", "Área", "Repartición", "Última interacción", "Semáforo", "Edad", "Estado", "Alta"];
+
+const TRAFFIC_CSV: Record<string, string> = { green: "Verde", yellow: "Amarillo", red: "Rojo", gray: "Gris" };
 
 const STATUS_LABEL: Record<string, string> = { active: "Activa", inactive: "Inactiva", merged: "Fusionada" };
 
@@ -32,7 +33,7 @@ export async function exportPeopleCsv(
 ): Promise<string> {
   assertPermission(actor, "people.export");
 
-  const rows = await listAllMatching(filter, sort);
+  const rows = await listAllMatching(actor, filter, sort);
   const canSeeSensitive = can(actor, "people.view_sensitive");
 
   const lines = [CSV_HEADER.map(sanitizeCsvCell).join(",")];
@@ -46,7 +47,10 @@ export async function exportPeopleCsv(
         masked.dni ?? "",
         masked.email ?? "",
         masked.phone ?? "",
-        masked.organizationName ?? "",
+        masked.areaName ?? "",
+        masked.reparticionName ?? "",
+        masked.lastInteractionDate ?? "",
+        TRAFFIC_CSV[masked.trafficLight] ?? "",
         age !== null ? String(age) : "",
         STATUS_LABEL[masked.status] ?? masked.status,
         masked.createdAt.toISOString().slice(0, 10),
@@ -59,12 +63,6 @@ export async function exportPeopleCsv(
   // BOM para que Excel detecte UTF-8 y no rompa acentos/ñ.
   const csv = `﻿${lines.join("\r\n")}`;
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "PERSONS_EXPORTED",
-    entityType: "person",
-    metadata: { filter, count: rows.length } as unknown as Json,
-  });
 
   return csv;
 }

@@ -20,10 +20,10 @@ export default async function FormSubmissionsPage({ params }: { params: Promise<
   const actor = await requirePermission("forms.view");
   const { id } = await params;
 
-  const form = await getFormById(id);
+  const form = await getFormById(actor, id);
   if (!form) notFound();
 
-  const submissions = await listSubmissions(id);
+  const submissions = await listSubmissions(actor, id);
   const canExport = can(actor, "forms.export_submissions");
 
   return (

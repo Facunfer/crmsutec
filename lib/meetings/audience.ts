@@ -1,4 +1,6 @@
 import { sql } from "kysely";
+import type { SessionUser } from "../permissions/can.js";
+import { orgScope } from "../scope/organizations.js";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 
@@ -38,11 +40,15 @@ async function expandOrganizationIds(organizationIds: string[]): Promise<string[
   return result.rows.map((r) => r.id);
 }
 
-async function resolveAudienceQuery(spec: MeetingAudienceSpec) {
+/** La audiencia se arma solo con personas dentro del alcance de quien invita. */
+async function resolveAudienceQuery(actor: SessionUser, spec: MeetingAudienceSpec) {
   const db = await getDb();
   const expandedOrgIds = await expandOrganizationIds(spec.organizationIds ?? []);
 
-  let query = db.selectFrom("people").where("people.status", "=", "active");
+  let query = db
+    .selectFrom("people")
+    .where("people.status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"));
 
   const branches: Array<(eb: Parameters<typeof query.where>[0] extends infer _ ? any : never) => any> = [];
   if (spec.personIds && spec.personIds.length > 0) {
@@ -75,16 +81,16 @@ async function resolveAudienceQuery(spec: MeetingAudienceSpec) {
   return query;
 }
 
-export async function countAudience(spec: MeetingAudienceSpec): Promise<number> {
+export async function countAudience(actor: SessionUser, spec: MeetingAudienceSpec): Promise<number> {
   if (isEmptyAudienceSpec(spec)) return 0;
-  const query = await resolveAudienceQuery(spec);
+  const query = await resolveAudienceQuery(actor, spec);
   const row = await query.select(({ fn }) => fn.count<number>("people.id").as("count")).executeTakeFirstOrThrow();
   return Number(row.count);
 }
 
-export async function resolveAudienceIds(spec: MeetingAudienceSpec): Promise<string[]> {
+export async function resolveAudienceIds(actor: SessionUser, spec: MeetingAudienceSpec): Promise<string[]> {
   if (isEmptyAudienceSpec(spec)) return [];
-  const query = await resolveAudienceQuery(spec);
+  const query = await resolveAudienceQuery(actor, spec);
   const rows = await query.select("people.id").execute();
   return rows.map((r) => r.id);
 }

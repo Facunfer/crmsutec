@@ -1,14 +1,18 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
-import { computeDisplayAge, listPeoplePage, type PeopleFilterSpec, type PeopleSort } from "@/lib/people/queries";
+import { getTrafficKpis, listPeoplePage, type PeopleFilterSpec, type PeopleSort } from "@/lib/people/queries";
+import { isTrafficLight } from "@/lib/people/traffic";
 import { applyMasking } from "@/lib/people/masking";
-import { listActiveOrganizationOptions } from "@/lib/organizations/queries";
+import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
 import { listAssociations } from "@/lib/associations/queries";
 import { FilterBar } from "./FilterBar";
 import { PeopleGrid, type PersonDisplayRow } from "./PeopleGrid";
+import { TrafficKpiCards } from "./TrafficKpis";
 
 const PAGE_SIZE = 20;
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function PersonasPage({
   searchParams,
@@ -20,7 +24,11 @@ export default async function PersonasPage({
 
   const filter: PeopleFilterSpec = {
     search: sp.q || undefined,
-    organizationIds: sp.org ? [sp.org] : undefined,
+    areaId: sp.area || undefined,
+    reparticionId: sp.rep || undefined,
+    trafficLight: isTrafficLight(sp.traffic) ? sp.traffic : undefined,
+    lastInteractionFrom: sp.lastFrom && ISO_DAY.test(sp.lastFrom) ? sp.lastFrom : undefined,
+    lastInteractionTo: sp.lastTo && ISO_DAY.test(sp.lastTo) ? sp.lastTo : undefined,
     status: (sp.status as PeopleFilterSpec["status"]) || "active",
     ageMin: sp.ageMin ? Number(sp.ageMin) : undefined,
     ageMax: sp.ageMax ? Number(sp.ageMax) : undefined,
@@ -31,17 +39,18 @@ export default async function PersonasPage({
   };
   const page = sp.page ? Math.max(1, Number(sp.page)) : 1;
 
-  const [{ rows, total }, organizations, associations] = await Promise.all([
-    listPeoplePage(filter, sort, page, PAGE_SIZE),
-    listActiveOrganizationOptions(),
-    can(actor, "associations.manage_members") ? listAssociations() : Promise.resolve([]),
+  const [{ rows, total }, kpis, orgTree, associations] = await Promise.all([
+    listPeoplePage(actor, filter, sort, page, PAGE_SIZE),
+    getTrafficKpis(actor, filter),
+    listOrgTreeOptions(actor),
+    can(actor, "associations.manage_members") ? listAssociations(actor) : Promise.resolve([]),
   ]);
+  const areas = await listAreaOptions(actor, orgTree);
   const activeAssociations = associations.filter((a) => a.status === "active");
 
   const canSeeSensitive = can(actor, "people.view_sensitive");
   const displayRows: PersonDisplayRow[] = rows.map((row) => {
     const masked = applyMasking(row, canSeeSensitive);
-    const { age, estimated } = computeDisplayAge(row);
     return {
       id: masked.id,
       firstName: masked.firstName,
@@ -49,19 +58,27 @@ export default async function PersonasPage({
       dni: masked.dni,
       email: masked.email,
       phone: masked.phone,
-      organizationName: masked.organizationName,
-      age,
-      ageEstimated: estimated,
+      areaName: row.areaName,
+      reparticionName: row.reparticionName,
+      lastInteractionDate: row.lastInteractionDate,
+      daysSinceInteraction: row.daysSinceInteraction,
+      trafficLight: row.trafficLight,
       status: masked.status,
     };
   });
 
-  const exportParams = new URLSearchParams();
-  if (filter.search) exportParams.set("q", filter.search);
-  if (filter.organizationIds?.[0]) exportParams.set("org", filter.organizationIds[0]);
-  if (filter.status) exportParams.set("status", filter.status);
-  if (filter.ageMin !== undefined) exportParams.set("ageMin", String(filter.ageMin));
-  if (filter.ageMax !== undefined) exportParams.set("ageMax", String(filter.ageMax));
+  // Filtros de la URL (sin semáforo ni página): base de los KPIs clicables. `exportQueryString` los incluye todos.
+  const baseParams = new URLSearchParams();
+  if (filter.search) baseParams.set("q", filter.search);
+  if (filter.areaId) baseParams.set("area", filter.areaId);
+  if (filter.reparticionId) baseParams.set("rep", filter.reparticionId);
+  if (filter.lastInteractionFrom) baseParams.set("lastFrom", filter.lastInteractionFrom);
+  if (filter.lastInteractionTo) baseParams.set("lastTo", filter.lastInteractionTo);
+  if (filter.status) baseParams.set("status", filter.status);
+  if (filter.ageMin !== undefined) baseParams.set("ageMin", String(filter.ageMin));
+  if (filter.ageMax !== undefined) baseParams.set("ageMax", String(filter.ageMax));
+  const exportParams = new URLSearchParams(baseParams);
+  if (filter.trafficLight) exportParams.set("traffic", filter.trafficLight);
   exportParams.set("sort", sort.field);
   exportParams.set("dir", sort.direction);
 
@@ -79,7 +96,9 @@ export default async function PersonasPage({
         ) : null}
       </div>
 
-      <FilterBar organizations={organizations} />
+      <TrafficKpiCards kpis={kpis} active={filter.trafficLight} baseQuery={baseParams.toString()} />
+
+      <FilterBar areas={areas} orgTree={orgTree} />
 
       <PeopleGrid
         rows={displayRows}

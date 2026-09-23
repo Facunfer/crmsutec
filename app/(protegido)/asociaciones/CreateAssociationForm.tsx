@@ -2,11 +2,18 @@
 
 import { useActionState } from "react";
 import type { AssociationTypeItem } from "@/lib/associations/queries";
+import type { OrganizationOption } from "@/lib/organizations/queries";
 import { createAssociationAction, type AssociationActionResult } from "./acciones";
 
 const initialState: AssociationActionResult = { ok: false };
 
-export function CreateAssociationForm({ types }: { types: AssociationTypeItem[] }) {
+export function CreateAssociationForm({
+  types,
+  organizations,
+}: {
+  types: AssociationTypeItem[];
+  organizations: OrganizationOption[];
+}) {
   const [state, formAction, pending] = useActionState(createAssociationAction, initialState);
 
   return (
@@ -23,6 +30,16 @@ export function CreateAssociationForm({ types }: { types: AssociationTypeItem[] 
             {types.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-brand-500">Unidad organizativa</label>
+          <select name="ownerOrganizationId" required className="mt-1 rounded-md border border-brand-200 px-2 py-1.5 text-sm">
+            {organizations.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
               </option>
             ))}
           </select>

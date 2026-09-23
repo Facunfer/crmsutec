@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { getSessionUser } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { getDb } from "@/lib/db/client";
+import { canAccessMeeting } from "@/lib/scope/organizations";
 import { signRotatingQrToken, signStaticQrToken } from "@/lib/attendance/qr";
 
 /** Polling del organizador para refrescar el QR en pantalla (D12): nunca cachear, siempre el token vigente. */
@@ -11,6 +12,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!can(user, "meetings.view")) return new Response("No tenés permiso.", { status: 403 });
 
   const { id } = await params;
+  // Sin esto, cualquiera con meetings.view emitiría QR válidos de reuniones ajenas.
+  if (!(await canAccessMeeting(user, id))) return new Response("La reunión no existe.", { status: 404 });
+
   const db = await getDb();
   const meeting = await db
     .selectFrom("meetings")
@@ -19,6 +23,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     .executeTakeFirst();
 
   if (!meeting) return new Response("La reunión no existe.", { status: 404 });
+
+  // Una actividad importada sin fecha/hora no tiene check-in por QR.
+  if (!meeting.starts_at || !meeting.ends_at) {
+    return new Response("La reunión no tiene fecha y hora para acreditar por QR.", { status: 409 });
+  }
 
   if (meeting.qr_mode === "static") {
     const from = new Date(meeting.starts_at.getTime() - meeting.checkin_tolerance_before_minutes * 60_000);

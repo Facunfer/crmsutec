@@ -1,6 +1,7 @@
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
+import { syncParticipationInteractions } from "../interactions/participation-sync.js";
 import { assertServerOnly } from "../server-only.js";
-import { writeAuditLog } from "../audit/log.js";
 import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
 import { normalizeDni, normalizeEmail, normalizePhone } from "../people/normalize.js";
 import { isQrWithinWindow, verifyQrSignature, DEFAULT_ROTATION_SECONDS } from "./qr.js";
@@ -35,6 +36,8 @@ export async function resolveQrToken(token: string, ip: string): Promise<QrResol
   }
   if (meeting.status === "cancelled") return { kind: "cancelled" };
 
+  // Una actividad importada sin fecha/hora no admite check-in.
+  if (!meeting.starts_at || !meeting.ends_at) return { kind: "not_active" };
   const now = Date.now();
   const from = meeting.starts_at.getTime() - meeting.checkin_tolerance_before_minutes * 60_000;
   const to = meeting.ends_at.getTime() + meeting.checkin_tolerance_after_minutes * 60_000;
@@ -55,8 +58,34 @@ export type IdentifyResult =
   | { kind: "need_confirmation"; firstName: string; confirmToken: string }
   | { kind: "already_checked_in"; firstName: string; checkedInAt: Date }
   | { kind: "not_found" }
-  | { kind: "not_invited" }
   | { kind: "rate_limited" };
+
+/**
+ * Quién puede identificarse en una reunión: SOLO personas válidas para ESA
+ * reunión, decididas a partir de la reunión (ya resuelta por su QR/token
+ * válido) y nunca por una búsqueda global:
+ *  - quien tiene una invitación vigente a esta reunión; o
+ *  - si la reunión permite acreditación sin invitación, quien pertenece a la
+ *    unidad propietaria de la reunión o a sus dependientes.
+ * Una persona de otra unidad (o sin unidad) no aparece: para el endpoint es
+ * indistinguible de una que no existe.
+ */
+function eligibleForMeeting(meeting: { id: string; owner_organization_id: string; allow_uninvited_checkin: boolean }, personColumn = "people.id", orgColumn = "people.organization_id") {
+  return sql<boolean>`(
+    exists (
+      select 1 from meeting_invitations mi
+      where mi.meeting_id = ${meeting.id}::uuid
+        and mi.person_id = ${sql.ref(personColumn)}
+        and mi.withdrawn_at is null
+    )
+    or (
+      ${meeting.allow_uninvited_checkin}::boolean
+      and ${sql.ref(orgColumn)} in (
+        select organization_id from organization_descendants(${meeting.owner_organization_id}::uuid)
+      )
+    )
+  )`;
+}
 
 /**
  * Prioridad de identificación (sección 12.2): acá se cubren las
@@ -65,10 +94,10 @@ export type IdentifyResult =
  * camino aparte — ver `checkInWithInvitationToken`, que ya conoce a la
  * persona y no necesita este paso.
  *
- * Mensajes que nunca distinguen "no existe" de "existe pero no coincide
- * el apellido" ni de "existe pero no está invitada": todo cae en
- * "not_found" salvo el caso explícito de invitada-pero-no-encontrada, que
- * de por sí ya no revela nada (sección 12.2: no enumerar).
+ * Toda falla — la persona no existe, existe pero el apellido no coincide,
+ * existe pero no es válida para esta reunión (no invitada, o de otra unidad)
+ * — devuelve exactamente lo mismo: "not_found" (sección 12.2: no enumerar).
+ * La búsqueda ya nace acotada a las personas válidas para la reunión.
  */
 export async function identifyForCheckin(
   meetingId: string,
@@ -87,45 +116,61 @@ export async function identifyForCheckin(
   const phone = normalizePhone(identifier);
   const lastNameNormalized = lastName.trim().toLowerCase();
 
-  if (!lastNameNormalized || (!dni && !email && !phone)) {
+  const fail = async (): Promise<IdentifyResult> => {
     await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, false);
     return { kind: "not_found" };
-  }
+  };
+
+  if (!lastNameNormalized || (!dni && !email && !phone)) return fail();
 
   const db = await getDb();
-  let person = dni
-    ? await db.selectFrom("people").selectAll().where("dni", "=", dni).where("status", "=", "active").executeTakeFirst()
-    : undefined;
-  if (!person && email) {
-    person = await db
-      .selectFrom("people")
-      .selectAll()
-      .where(({ fn }) => fn("lower", ["email"]), "=", email)
-      .where("status", "=", "active")
-      .executeTakeFirst();
-  }
-  if (!person && phone) {
-    person = await db.selectFrom("people").selectAll().where("phone", "=", phone).where("status", "=", "active").executeTakeFirst();
-  }
-
-  if (!person || person.last_name.trim().toLowerCase() !== lastNameNormalized) {
-    await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, false);
-    return { kind: "not_found" };
-  }
-
-  const meeting = await db.selectFrom("meetings").select(["allow_uninvited_checkin"]).where("id", "=", meetingId).executeTakeFirst();
-  const invitation = await db
-    .selectFrom("meeting_invitations")
-    .select(["id"])
-    .where("meeting_id", "=", meetingId)
-    .where("person_id", "=", person.id)
-    .where("withdrawn_at", "is", null)
+  const meeting = await db
+    .selectFrom("meetings")
+    .select(["id", "owner_organization_id", "allow_uninvited_checkin"])
+    .where("id", "=", meetingId)
     .executeTakeFirst();
+  if (!meeting) return fail();
 
-  if (!invitation && !meeting?.allow_uninvited_checkin) {
-    await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, false);
-    return { kind: "not_invited" };
+  const eligible = eligibleForMeeting(meeting);
+  const candidates: Array<{ id: string; first_name: string; last_name: string }> = [];
+
+  if (dni) {
+    candidates.push(
+      ...(await db
+        .selectFrom("people")
+        .select(["id", "first_name", "last_name"])
+        .where("dni", "=", dni)
+        .where("status", "=", "active")
+        .where(eligible)
+        .execute())
+    );
   }
+  if (email) {
+    candidates.push(
+      ...(await db
+        .selectFrom("people")
+        .select(["id", "first_name", "last_name"])
+        .where(({ fn }) => fn("lower", ["email"]), "=", email)
+        .where("status", "=", "active")
+        .where(eligible)
+        .execute())
+    );
+  }
+  if (phone) {
+    candidates.push(
+      ...(await db
+        .selectFrom("people")
+        .select(["id", "first_name", "last_name"])
+        .where("phone", "=", phone)
+        .where("status", "=", "active")
+        .where(eligible)
+        .execute())
+    );
+  }
+
+  // Email/teléfono pueden compartirse: entre los candidatos válidos, el que coincide con el apellido.
+  const person = candidates.find((c) => c.last_name.trim().toLowerCase() === lastNameNormalized);
+  if (!person) return fail();
 
   const existingAttendance = await db
     .selectFrom("meeting_attendance")
@@ -193,6 +238,7 @@ async function recordCheckIn(
   const meeting = await db.selectFrom("meetings").selectAll().where("id", "=", meetingId).executeTakeFirst();
   if (!meeting || meeting.status === "cancelled") return { kind: "invalid" };
 
+  if (!meeting.starts_at || !meeting.ends_at) return { kind: "not_active" };
   const now = Date.now();
   const from = meeting.starts_at.getTime() - meeting.checkin_tolerance_before_minutes * 60_000;
   const to = meeting.ends_at.getTime() + meeting.checkin_tolerance_after_minutes * 60_000;
@@ -218,6 +264,18 @@ async function recordCheckIn(
     .where("person_id", "=", personId)
     .where("withdrawn_at", "is", null)
     .executeTakeFirst();
+
+  // Defensa en profundidad: aunque el token de confirmación se emite después de
+  // identificar, registrar exige que la persona sea válida para ESTA reunión.
+  if (!invitation) {
+    const eligible = await db
+      .selectFrom("people")
+      .select("id")
+      .where("id", "=", personId)
+      .where(eligibleForMeeting(meeting))
+      .executeTakeFirst();
+    if (!eligible) return { kind: "invalid" };
+  }
 
   const checkedInAt = new Date();
 
@@ -260,13 +318,10 @@ async function recordCheckIn(
     throw new Error("No se pudo registrar el check-in.");
   }
 
-  await writeAuditLog({
-    actorType: "public",
-    action: "CHECKIN_REGISTERED",
-    entityType: "meeting",
-    entityId: meetingId,
-    metadata: { person_id: personId, method },
-  });
+  // La asistencia real genera la interacción de la persona (idempotente). Si falla, el check-in ya quedó registrado y
+  // se regenera en la próxima sincronización: no se le rompe el ingreso a quien acaba de hacerlo.
+  await syncParticipationInteractions(db, { meetingId, personId }).catch(() => undefined);
+
 
   return { kind: "ok", firstName: person.first_name, checkedInAt };
 }

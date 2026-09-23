@@ -1,6 +1,8 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { maskDni } from "../people/masking.js";
+import type { SessionUser } from "../permissions/can.js";
+import { canAccessAssociation, orgScope } from "../scope/organizations.js";
 
 assertServerOnly("lib/associations/queries.ts");
 
@@ -31,10 +33,12 @@ export interface AssociationListItem {
   createdAt: Date;
 }
 
-export async function listAssociations(): Promise<AssociationListItem[]> {
+/** Solo asociaciones cuya unidad propietaria está dentro del alcance del usuario. */
+export async function listAssociations(actor: SessionUser): Promise<AssociationListItem[]> {
   const db = await getDb();
   const rows = await db
     .selectFrom("associations")
+    .where(orgScope(actor, "associations.owner_organization_id"))
     .innerJoin("association_types", "association_types.id", "associations.type_id")
     .leftJoin("people_associations", (join) =>
       join
@@ -74,6 +78,7 @@ export async function listAssociations(): Promise<AssociationListItem[]> {
 
 export interface AssociationDetail {
   id: string;
+  ownerOrganizationId: string;
   name: string;
   description: string | null;
   status: "active" | "inactive";
@@ -82,13 +87,17 @@ export interface AssociationDetail {
   createdAt: Date;
 }
 
-export async function getAssociationById(id: string): Promise<AssociationDetail | null> {
+/** null si no existe O está fuera del alcance del usuario (no se distingue). */
+export async function getAssociationById(actor: SessionUser, id: string): Promise<AssociationDetail | null> {
+  if (!(await canAccessAssociation(actor, id))) return null;
+
   const db = await getDb();
   const row = await db
     .selectFrom("associations")
     .innerJoin("association_types", "association_types.id", "associations.type_id")
     .select([
       "associations.id",
+      "associations.owner_organization_id",
       "associations.name",
       "associations.description",
       "associations.status",
@@ -102,6 +111,7 @@ export async function getAssociationById(id: string): Promise<AssociationDetail 
   if (!row) return null;
   return {
     id: row.id,
+    ownerOrganizationId: row.owner_organization_id,
     name: row.name,
     description: row.description,
     status: row.status,
@@ -120,7 +130,13 @@ export interface AssociationMemberRow {
   addedAt: Date;
 }
 
-export async function listActiveMembers(associationId: string): Promise<AssociationMemberRow[]> {
+/**
+ * Miembros activos de una asociación del alcance del usuario. Solo se listan las
+ * personas que el usuario puede ver: un miembro de otra unidad no se expone.
+ */
+export async function listActiveMembers(actor: SessionUser, associationId: string): Promise<AssociationMemberRow[]> {
+  if (!(await canAccessAssociation(actor, associationId))) return [];
+
   const db = await getDb();
   const rows = await db
     .selectFrom("people_associations")
@@ -135,6 +151,7 @@ export async function listActiveMembers(associationId: string): Promise<Associat
     ])
     .where("people_associations.association_id", "=", associationId)
     .where("people_associations.status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"))
     .orderBy("people.last_name", "asc")
     .execute();
 
@@ -156,7 +173,9 @@ export interface AssociationManagerRow {
   personName: string | null;
 }
 
-export async function listManagers(associationId: string): Promise<AssociationManagerRow[]> {
+export async function listManagers(actor: SessionUser, associationId: string): Promise<AssociationManagerRow[]> {
+  if (!(await canAccessAssociation(actor, associationId))) return [];
+
   const db = await getDb();
   const rows = await db
     .selectFrom("association_managers")
@@ -183,24 +202,32 @@ export async function listManagers(associationId: string): Promise<AssociationMa
 }
 
 /** Miembros activos + reuniones vinculadas (calculado, 0 real hasta la Etapa 6) + asistencia promedio. */
-export async function getAssociationMetrics(associationId: string): Promise<{
+export async function getAssociationMetrics(actor: SessionUser, associationId: string): Promise<{
   activeMembers: number;
   linkedMeetings: number;
   averageAttendanceRate: number | null;
 }> {
+  if (!(await canAccessAssociation(actor, associationId))) {
+    return { activeMembers: 0, linkedMeetings: 0, averageAttendanceRate: null };
+  }
+
   const db = await getDb();
 
   const membersRow = await db
     .selectFrom("people_associations")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .where("association_id", "=", associationId)
-    .where("status", "=", "active")
+    .innerJoin("people", "people.id", "people_associations.person_id")
+    .select(({ fn }) => fn.count<number>("people_associations.id").as("count"))
+    .where("people_associations.association_id", "=", associationId)
+    .where("people_associations.status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"))
     .executeTakeFirstOrThrow();
 
   const meetingsRow = await db
     .selectFrom("meeting_associations")
-    .select(({ fn }) => fn.count<number>("meeting_id").as("count"))
-    .where("association_id", "=", associationId)
+    .innerJoin("meetings", "meetings.id", "meeting_associations.meeting_id")
+    .select(({ fn }) => fn.count<number>("meeting_associations.meeting_id").as("count"))
+    .where("meeting_associations.association_id", "=", associationId)
+    .where(orgScope(actor, "meetings.owner_organization_id"))
     .executeTakeFirstOrThrow();
 
   return {
@@ -212,6 +239,7 @@ export async function getAssociationMetrics(associationId: string): Promise<{
 
 /** Para elegir un responsable-persona: sin la exclusión de miembros ya activos. */
 export async function searchAnyActivePeople(
+  actor: SessionUser,
   search: string,
   limit = 20
 ): Promise<Array<{ id: string; firstName: string; lastName: string }>> {
@@ -224,6 +252,7 @@ export async function searchAnyActivePeople(
     .selectFrom("people")
     .select(["id", "first_name", "last_name"])
     .where("status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"))
     .where((eb) => eb.or([eb("first_name", "ilike", pattern), eb("last_name", "ilike", pattern)]))
     .limit(limit)
     .execute();
@@ -238,11 +267,14 @@ export async function searchAnyActivePeople(
  * enmascara acá mismo, nunca le llega el valor real al cliente.
  */
 export async function searchPeopleToAdd(
+  actor: SessionUser,
   associationId: string,
   search: string,
   canSeeSensitive: boolean,
   limit = 20
 ): Promise<Array<{ id: string; firstName: string; lastName: string; dni: string | null }>> {
+  if (!(await canAccessAssociation(actor, associationId))) return [];
+
   const db = await getDb();
   const term = search.trim();
   if (term.length < 2) return [];
@@ -253,6 +285,7 @@ export async function searchPeopleToAdd(
     .selectFrom("people")
     .select(["id", "first_name", "last_name", "dni"])
     .where("status", "=", "active")
+    .where(orgScope(actor, "people.organization_id"))
     .where((eb) =>
       eb.or([
         eb("first_name", "ilike", pattern),

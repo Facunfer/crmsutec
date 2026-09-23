@@ -2,17 +2,22 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { listAssociationTypes, listAssociations } from "@/lib/associations/queries";
+import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
 import { CreateAssociationForm } from "./CreateAssociationForm";
 
 export default async function AsociacionesPage() {
   const actor = await requirePermission("associations.view");
-  const [associations, types] = await Promise.all([listAssociations(), listAssociationTypes()]);
+  const [associations, types, organizations] = await Promise.all([
+    listAssociations(actor),
+    listAssociationTypes(),
+    can(actor, "associations.create") ? listOwnerOrganizationOptions(actor.id) : Promise.resolve([]),
+  ]);
 
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold text-brand-900">Asociaciones</h1>
 
-      {can(actor, "associations.create") ? <CreateAssociationForm types={types} /> : null}
+      {can(actor, "associations.create") ? <CreateAssociationForm types={types} organizations={organizations} /> : null}
 
       <div className="overflow-x-auto rounded-lg bg-white p-4 shadow-sm">
         <table className="min-w-full text-left text-sm">

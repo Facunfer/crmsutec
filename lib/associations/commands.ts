@@ -1,8 +1,9 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { SessionUser } from "../permissions/can.js";
+import { canActorOwnInOrganization } from "../organizations/ownership.js";
+import { canAccessAssociation } from "../scope/organizations.js";
 
 assertServerOnly("lib/associations/commands.ts");
 
@@ -12,6 +13,7 @@ export interface CreateAssociationInput {
   name: string;
   description?: string;
   typeId: string;
+  ownerOrganizationId: string;
 }
 
 export async function createAssociation(
@@ -31,9 +33,14 @@ export async function createAssociation(
     .executeTakeFirst();
   if (!type) throw new AssociationCommandError("El tipo de asociación no existe.");
 
+  if (!(await canActorOwnInOrganization(actor.id, input.ownerOrganizationId))) {
+    throw new AssociationCommandError("La unidad organizativa no existe, está inactiva o está fuera de tu alcance.");
+  }
+
   const created = await db
     .insertInto("associations")
     .values({
+      owner_organization_id: input.ownerOrganizationId,
       name,
       description: input.description?.trim() || null,
       type_id: input.typeId,
@@ -42,13 +49,6 @@ export async function createAssociation(
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_CREATED",
-    entityType: "association",
-    entityId: created.id,
-    after: { name, type_id: input.typeId },
-  });
 
   return { id: created.id };
 }
@@ -66,6 +66,10 @@ export async function updateAssociation(
 ): Promise<void> {
   assertPermission(actor, "associations.edit");
 
+  if (!(await canAccessAssociation(actor, associationId))) {
+    throw new AssociationCommandError("La asociación no existe.");
+  }
+
   const db = await getDb();
   const existing = await db
     .selectFrom("associations")
@@ -81,14 +85,6 @@ export async function updateAssociation(
 
   await db.updateTable("associations").set(patch).where("id", "=", associationId).execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_UPDATED",
-    entityType: "association",
-    entityId: associationId,
-    before: { name: existing.name, description: existing.description, type_id: existing.type_id },
-    after: { name: input.name ?? null, description: input.description ?? null, type_id: input.typeId ?? null },
-  });
 }
 
 export async function setAssociationActive(
@@ -98,6 +94,10 @@ export async function setAssociationActive(
 ): Promise<void> {
   assertPermission(actor, "associations.deactivate");
 
+  if (!(await canAccessAssociation(actor, associationId))) {
+    throw new AssociationCommandError("La asociación no existe.");
+  }
+
   const db = await getDb();
   await db
     .updateTable("associations")
@@ -105,11 +105,4 @@ export async function setAssociationActive(
     .where("id", "=", associationId)
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: "ASSOCIATION_UPDATED",
-    entityType: "association",
-    entityId: associationId,
-    after: { status: active ? "active" : "inactive" },
-  });
 }

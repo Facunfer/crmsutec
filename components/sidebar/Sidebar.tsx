@@ -5,7 +5,8 @@ import type { PermissionKey } from "@/lib/permissions/catalog";
 interface MenuItem {
   label: string;
   href: string;
-  permission: PermissionKey;
+  /** Alcanza con tener cualquiera de los permisos indicados. */
+  permission: PermissionKey | PermissionKey[];
   built: boolean;
 }
 
@@ -19,11 +20,14 @@ const MAIN_MENU: MenuItem[] = [
 ];
 
 const ADMIN_MENU: MenuItem[] = [
-  { label: "Usuarios", href: "/administracion/usuarios", permission: "users.manage", built: true },
-  { label: "Roles", href: "/administracion/roles", permission: "roles.manage", built: true },
+  { label: "Usuarios", href: "/administracion/usuarios", permission: ["users.manage", "users.manage_scoped"], built: true },
   { label: "Organismos", href: "/administracion/organismos", permission: "organizations.manage", built: true },
-  { label: "Campos personalizados", href: "/administracion/campos-personalizados", permission: "people.manage_custom_fields", built: true },
 ];
+
+function isVisible(user: SessionUser, item: MenuItem): boolean {
+  const required = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return required.some((permission) => can(user, permission));
+}
 
 function MenuLink({ item }: { item: MenuItem }) {
   if (!item.built) {
@@ -48,8 +52,8 @@ function MenuLink({ item }: { item: MenuItem }) {
 }
 
 export function Sidebar({ user }: { user: SessionUser }) {
-  const mainItems = MAIN_MENU.filter((item) => can(user, item.permission));
-  const adminItems = ADMIN_MENU.filter((item) => can(user, item.permission));
+  const mainItems = MAIN_MENU.filter((item) => isVisible(user, item));
+  const adminItems = ADMIN_MENU.filter((item) => isVisible(user, item));
 
   return (
     <nav className="w-64 shrink-0 border-r border-brand-100 bg-white p-4">

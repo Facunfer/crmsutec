@@ -1,12 +1,12 @@
 import { z } from "zod";
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import { writeAuditLog } from "../audit/log.js";
 import { toJsonb } from "../db/json.js";
 import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
 import { FIELD_TYPES, isCorePersonMapping } from "./field-types.js";
 import { getFormBySlug, getPublishedVersionSchema } from "./queries.js";
-import { applyActions, createPersonFromSubmission, mergeEmptyFieldsOnly, splitCoreAndCustomValues } from "./apply.js";
+import { applyActions, createPersonFromSubmission, FormApplyError, MISSING_DNI_MESSAGE, mergeEmptyFieldsOnly, splitCoreAndCustomValues, submissionDni } from "./apply.js";
 import { matchPerson } from "./matching.js";
 import type { FormVersionField, FormVersionSchema } from "./version-schema.js";
 
@@ -47,7 +47,7 @@ const DEFAULT_NOT_AVAILABLE = "Este formulario no está disponible en este momen
 
 export async function getPublicForm(
   slug: string
-): Promise<{ kind: "ok"; formId: string; schema: FormVersionSchema } | { kind: "not_found" } | { kind: "not_available" }> {
+): Promise<{ kind: "ok"; formId: string; ownerOrganizationId: string; schema: FormVersionSchema } | { kind: "not_found" } | { kind: "not_available" }> {
   const form = await getFormBySlug(slug);
   if (!form) return { kind: "not_found" };
   if (form.status !== "published") return { kind: "not_available" };
@@ -56,7 +56,7 @@ export async function getPublicForm(
   if (!schema) return { kind: "not_found" };
   if (!isWithinWindow(new Date(), form.opensAt, form.closesAt)) return { kind: "not_available" };
 
-  return { kind: "ok", formId: form.id, schema };
+  return { kind: "ok", formId: form.id, ownerOrganizationId: form.ownerOrganizationId, schema };
 }
 
 export async function submitForm(
@@ -128,13 +128,16 @@ export async function submitForm(
   }
 
   try {
-    await processSubmission(inserted.id, form.id, schema, normalizedValues);
+    await processSubmission(inserted.id, form.id, form.ownerOrganizationId, schema, normalizedValues);
   } catch (err) {
     await db
       .updateTable("form_submissions")
       .set({ match_result: "error", error_message: err instanceof Error ? err.message : String(err), processed_at: new Date() })
       .where("id", "=", inserted.id)
       .execute();
+    // Con quién choca el DNI queda solo en la auditoría (MASTER_GLOBAL), no en el mensaje que ve quien revisa.
+    if (err instanceof FormApplyError && err.conflictPersonId) {
+    }
   }
 
   return { kind: "ok", successMessage };
@@ -143,6 +146,7 @@ export async function submitForm(
 async function processSubmission(
   submissionId: string,
   formId: string,
+  ownerOrganizationId: string,
   schema: FormVersionSchema,
   normalizedValues: Record<string, unknown>
 ): Promise<void> {
@@ -158,14 +162,44 @@ async function processSubmission(
   const outcome = await matchPerson(schema.identificationPolicy.matchFields, identity);
 
   if (outcome.kind === "none") {
-    const personId = await createPersonFromSubmission(coreValues, customValues);
+    // Sin coincidencia y sin DNI válido no se puede crear una persona: el envío se conserva, queda en revisión
+    // (candidato sin persona propuesta) y NO se inserta nada en `people`.
+    if (!submissionDni(coreValues)) {
+      await db.insertInto("person_duplicate_candidates").values({ person_id: null, submission_id: submissionId, match_reason: MISSING_DNI_MESSAGE }).execute();
+      await db.updateTable("form_submissions").set({ match_result: "needs_review", processed_at: new Date() }).where("id", "=", submissionId).execute();
+      return;
+    }
+    const personId = await createPersonFromSubmission(coreValues, customValues, ownerOrganizationId);
     await db
       .updateTable("form_submissions")
       .set({ match_result: "created", person_id: personId, processed_at: new Date() })
       .where("id", "=", submissionId)
       .execute();
-    await writeAuditLog({ actorType: "public", action: "FORM_SUBMISSION_CREATED_PERSON", entityType: "person", entityId: personId, metadata: { form_id: formId, submission_id: submissionId } });
     await applyActions(schema, personId, normalizedValues);
+    return;
+  }
+
+  // Un envío público nunca escribe sobre una persona de otra unidad: la coincidencia con
+  // alguien fuera del árbol de la unidad del formulario va a revisión, sin modificar nada.
+  const outsideIds = await personIdsOutsideOrganizationTree(
+    outcome.kind === "single" ? [outcome.personId] : outcome.kind === "multiple" ? outcome.personIds : [],
+    ownerOrganizationId
+  );
+  if (outsideIds.size > 0) {
+    const candidateIds = outcome.kind === "single" ? [outcome.personId] : outcome.kind === "multiple" ? outcome.personIds : [];
+    for (const personId of candidateIds) {
+      await db
+        .insertInto("person_duplicate_candidates")
+        .values({
+          person_id: personId,
+          submission_id: submissionId,
+          match_reason: outsideIds.has(personId)
+            ? "Coincide con una persona de otra unidad; no se modifica desde este formulario."
+            : "Coincide con una persona de la unidad, junto a otra de otra unidad.",
+        })
+        .execute();
+    }
+    await db.updateTable("form_submissions").set({ match_result: "needs_review", processed_at: new Date() }).where("id", "=", submissionId).execute();
     return;
   }
 
@@ -177,7 +211,6 @@ async function processSubmission(
         .set({ match_result: "matched", person_id: outcome.personId, processed_at: new Date() })
         .where("id", "=", submissionId)
         .execute();
-      await writeAuditLog({ actorType: "public", action: "FORM_SUBMISSION_MATCHED", entityType: "person", entityId: outcome.personId, metadata: { form_id: formId, submission_id: submissionId, matched_by: outcome.matchedBy } });
       await applyActions(schema, outcome.personId, normalizedValues);
       return;
     }
@@ -187,7 +220,6 @@ async function processSubmission(
       .values({ person_id: outcome.personId, submission_id: submissionId, match_reason: `Coincide por ${outcome.matchedBy.join(", ")}; la política del formulario exige revisión manual.` })
       .execute();
     await db.updateTable("form_submissions").set({ match_result: "needs_review", person_id: outcome.personId, processed_at: new Date() }).where("id", "=", submissionId).execute();
-    await writeAuditLog({ actorType: "public", action: "FORM_SUBMISSION_NEEDS_REVIEW", entityType: "person", entityId: outcome.personId, metadata: { form_id: formId, submission_id: submissionId, matched_by: outcome.matchedBy } });
     return;
   }
 
@@ -199,6 +231,19 @@ async function processSubmission(
       .execute();
   }
   await db.updateTable("form_submissions").set({ match_result: "needs_review", processed_at: new Date() }).where("id", "=", submissionId).execute();
-  await writeAuditLog({ actorType: "public", action: "FORM_SUBMISSION_NEEDS_REVIEW", entityType: "form_submission", entityId: submissionId, metadata: { form_id: formId, candidate_person_ids: outcome.personIds } });
 }
 
+
+/** De estos ids, los que NO pertenecen a la unidad propietaria del formulario ni a sus dependientes (una persona sin unidad también cuenta como "fuera"). */
+async function personIdsOutsideOrganizationTree(personIds: string[], ownerOrganizationId: string): Promise<Set<string>> {
+  if (personIds.length === 0) return new Set();
+  const db = await getDb();
+  const inside = await sql<{ id: string }>`
+    select p.id
+    from people p
+    where p.id in (${sql.join(personIds.map((id) => sql`${id}::uuid`))})
+      and p.organization_id in (select organization_id from organization_descendants(${ownerOrganizationId}::uuid))
+  `.execute(db);
+  const insideIds = new Set(inside.rows.map((r) => r.id));
+  return new Set(personIds.filter((id) => !insideIds.has(id)));
+}

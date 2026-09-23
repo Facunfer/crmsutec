@@ -1,8 +1,8 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
-import { writeAuditLog } from "../audit/log.js";
 import type { SessionUser } from "../permissions/can.js";
+import { orgScope } from "../scope/organizations.js";
 
 assertServerOnly("lib/people/bulk.ts");
 
@@ -21,15 +21,11 @@ export async function bulkSetActive(actor: SessionUser, personIds: string[], act
     .updateTable("people")
     .set({ status: active ? "active" : "inactive", updated_by: actor.id, updated_at: new Date() })
     .where("id", "in", ids)
+    // Los ids llegan del cliente: solo se actualizan las personas dentro del alcance del usuario.
+    .where(orgScope(actor, "people.organization_id"))
     .returning("id")
     .execute();
 
-  await writeAuditLog({
-    actorUserId: actor.id,
-    action: active ? "PERSON_UPDATED" : "PERSON_DEACTIVATED",
-    entityType: "person",
-    metadata: { bulk: true, count: updated.length, person_ids: ids },
-  });
 
   return updated.length;
 }
