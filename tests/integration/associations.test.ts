@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -8,6 +9,7 @@ process.env.SUTECBA_PGLITE_DATA_DIR = `.data/pglite-test-${randomUUID()}`;
 const { applyMigrations, parseFlags } = await import("../../scripts/migrate.js");
 const { runSeed } = await import("../../scripts/seed.js");
 const { closeDb, getDb } = await import("../../lib/db/client.js");
+const { createTestOrganization } = await import("../helpers/organization.js");
 const { hashPassword } = await import("../../lib/auth/passwords.js");
 const { createAssociation, setAssociationActive, AssociationCommandError } = await import(
   "../../lib/associations/commands.js"
@@ -22,9 +24,12 @@ const ALL_PERMISSIONS = new Set(PERMISSIONS.map((p) => p.key));
 let actor: any;
 let typeId: string;
 
+let ownerOrgId: string;
+
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
+  ownerOrgId = await createTestOrganization();
 
   const db = await getDb();
   const role = await db.selectFrom("roles").select("id").where("key", "=", "MASTER_GLOBAL").executeTakeFirstOrThrow();
@@ -46,6 +51,7 @@ beforeAll(async () => {
     roleId: role.id,
     roleKey: "MASTER_GLOBAL",
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS,
   };
 
@@ -70,7 +76,7 @@ async function makePerson(db: any, firstName: string, dni: string) {
 
 describe("ABM de asociaciones", () => {
   it("crea una asociación y la desactiva sin borrarla (R8)", async () => {
-    const { id } = await createAssociation(actor, { name: "Comisión de Prueba", typeId });
+    const { id } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión de Prueba", typeId });
     await setAssociationActive(actor, id, false);
 
     const db = await getDb();
@@ -79,7 +85,7 @@ describe("ABM de asociaciones", () => {
   });
 
   it("rechaza un tipo de asociación inexistente", async () => {
-    await expect(createAssociation(actor, { name: "X", typeId: "00000000-0000-0000-0000-000000000000" })).rejects.toThrow(
+    await expect(createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "X", typeId: "00000000-0000-0000-0000-000000000000" })).rejects.toThrow(
       AssociationCommandError
     );
   });
@@ -88,7 +94,7 @@ describe("ABM de asociaciones", () => {
 describe("miembros: alta idempotente y baja lógica", () => {
   it("agregar dos veces a la misma persona no crea una fila duplicada activa", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Delegados Test", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Delegados Test", typeId });
     const personId = await makePerson(db, "Mario", "32000001");
 
     await addMember(actor, associationId, personId);
@@ -106,11 +112,11 @@ describe("miembros: alta idempotente y baja lógica", () => {
 
   it("quitar un miembro lo marca inactivo, no borra la fila", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Delegados Test 2", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Delegados Test 2", typeId });
     const personId = await makePerson(db, "Nora", "32000002");
 
     await addMember(actor, associationId, personId);
-    const [membership] = await listActiveMembers(associationId);
+    const [membership] = await listActiveMembers(actor, associationId);
     if (!membership) throw new Error("expected a membership");
     await removeMember(actor, membership.membershipId);
 
@@ -122,22 +128,22 @@ describe("miembros: alta idempotente y baja lógica", () => {
     expect(row.status).toBe("inactive");
     expect(row.removed_at).not.toBeNull();
 
-    const active = await listActiveMembers(associationId);
+    const active = await listActiveMembers(actor, associationId);
     expect(active.length).toBe(0);
   });
 
   it("se puede volver a agregar a alguien después de haber sido quitado", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Delegados Test 3", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Delegados Test 3", typeId });
     const personId = await makePerson(db, "Otto", "32000003");
 
     await addMember(actor, associationId, personId);
-    const [membership] = await listActiveMembers(associationId);
+    const [membership] = await listActiveMembers(actor, associationId);
     if (!membership) throw new Error("expected a membership");
     await removeMember(actor, membership.membershipId);
     await addMember(actor, associationId, personId);
 
-    const active = await listActiveMembers(associationId);
+    const active = await listActiveMembers(actor, associationId);
     expect(active.length).toBe(1);
   });
 });
@@ -145,7 +151,7 @@ describe("miembros: alta idempotente y baja lógica", () => {
 describe("alta masiva desde una selección/filtro de Personas (sección 10)", () => {
   it("bulkAddMembers agrega solo activas y no duplica a quien ya es miembro", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Comisión Masiva", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión Masiva", typeId });
 
     const p1 = await makePerson(db, "Ana", "32000010");
     const p2 = await makePerson(db, "Beto", "32000011");
@@ -156,38 +162,38 @@ describe("alta masiva desde una selección/filtro de Personas (sección 10)", ()
     const count = await bulkAddMembers(actor, associationId, [p1, p2, p3]);
 
     expect(count).toBe(1); // solo p2 se agrega: p1 ya era miembro, p3 está inactiva
-    const active = await listActiveMembers(associationId);
+    const active = await listActiveMembers(actor, associationId);
     expect(active.map((m) => m.personId).sort()).toEqual([p1, p2].sort());
   });
 
   it("searchPeopleToAdd excluye a quienes ya son miembros activos", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Comisión Búsqueda", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión Búsqueda", typeId });
     const p1 = await makePerson(db, "Zulema", "32000020");
 
-    const before = await searchPeopleToAdd(associationId, "Zulema", true);
+    const before = await searchPeopleToAdd(actor, associationId, "Zulema", true);
     expect(before.map((r) => r.id)).toContain(p1);
 
     await addMember(actor, associationId, p1);
-    const after = await searchPeopleToAdd(associationId, "Zulema", true);
+    const after = await searchPeopleToAdd(actor, associationId, "Zulema", true);
     expect(after.map((r) => r.id)).not.toContain(p1);
   });
 
   it("searchPeopleToAdd exige al menos 2 caracteres", async () => {
-    const { id: associationId } = await createAssociation(actor, { name: "Comisión Mínimo", typeId });
-    const results = await searchPeopleToAdd(associationId, "a", true);
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión Mínimo", typeId });
+    const results = await searchPeopleToAdd(actor, associationId, "a", true);
     expect(results).toEqual([]);
   });
 
   it("searchPeopleToAdd enmascara el DNI sin people.view_sensitive (hallazgo real de la Etapa 10)", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Comisión Enmascarado", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión Enmascarado", typeId });
     await makePerson(db, "Wanda", "32000099");
 
-    const withPermission = await searchPeopleToAdd(associationId, "Wanda", true);
+    const withPermission = await searchPeopleToAdd(actor, associationId, "Wanda", true);
     expect(withPermission[0]?.dni).toBe("32000099");
 
-    const withoutPermission = await searchPeopleToAdd(associationId, "Wanda", false);
+    const withoutPermission = await searchPeopleToAdd(actor, associationId, "Wanda", false);
     expect(withoutPermission[0]?.dni).not.toBe("32000099");
     expect(withoutPermission[0]?.dni).toContain("*");
   });
@@ -196,13 +202,13 @@ describe("alta masiva desde una selección/filtro de Personas (sección 10)", ()
 describe("responsables", () => {
   it("agrega un usuario y una persona como responsables", async () => {
     const db = await getDb();
-    const { id: associationId } = await createAssociation(actor, { name: "Consejo Test", typeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Consejo Test", typeId });
     const personId = await makePerson(db, "Delegado", "32000030");
 
     await addManager(actor, associationId, { userId: actor.id });
     await addManager(actor, associationId, { personId });
 
-    const managers = await listManagers(associationId);
+    const managers = await listManagers(actor, associationId);
     expect(managers.length).toBe(2);
     expect(managers.some((m) => m.userId === actor.id)).toBe(true);
     expect(managers.some((m) => m.personId === personId)).toBe(true);

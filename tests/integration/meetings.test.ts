@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -8,6 +9,7 @@ process.env.SUTECBA_PGLITE_DATA_DIR = `.data/pglite-test-${randomUUID()}`;
 const { applyMigrations, parseFlags } = await import("../../scripts/migrate.js");
 const { runSeed } = await import("../../scripts/seed.js");
 const { closeDb, getDb } = await import("../../lib/db/client.js");
+const { createTestOrganization } = await import("../helpers/organization.js");
 const { hashPassword } = await import("../../lib/auth/passwords.js");
 const { createMeeting, updateMeeting, changeMeetingStatus, setMeetingAssociations, MeetingCommandError } = await import(
   "../../lib/meetings/commands.js"
@@ -36,9 +38,12 @@ function futureMeetingInput(offsetMinutes = 60, durationMinutes = 90) {
   return { startsAt: toLocal(start), endsAt: toLocal(end) };
 }
 
+let ownerOrgId: string;
+
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
+  ownerOrgId = await createTestOrganization();
 
   const db = await getDb();
   const role = await db.selectFrom("roles").select("id").where("key", "=", "MASTER_GLOBAL").executeTakeFirstOrThrow();
@@ -60,6 +65,7 @@ beforeAll(async () => {
     roleId: role.id,
     roleKey: "MASTER_GLOBAL",
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS,
   };
 
@@ -87,7 +93,7 @@ async function makePerson(firstName: string, dni: string, organizationId?: strin
 
 describe("ABM y máquina de estados (integración)", () => {
   it("crea en borrador, permite editar, y bloquea saltar a finalizada", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Test", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Test", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
 
     await updateMeeting(actor, id, { name: "Reunión Editada", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
 
@@ -103,7 +109,7 @@ describe("ABM y máquina de estados (integración)", () => {
   });
 
   it("al finalizar, las invitaciones sin respuesta de asistencia quedan 'absent' (se congela el resultado)", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Finaliza", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Finaliza", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
 
     const personId = await makePerson("Finaliza", "33000001");
@@ -112,17 +118,17 @@ describe("ABM y máquina de estados (integración)", () => {
     await changeMeetingStatus(actor, id, "in_progress");
     await changeMeetingStatus(actor, id, "finished");
 
-    const [invitation] = await listInvitations(id);
+    const [invitation] = await listInvitations(actor, id);
     expect(invitation?.attendanceStatus).toBe("absent");
   });
 
   it("una reunión finalizada no deja tocar sus asociaciones relacionadas (server-side, no solo la UI)", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Sin Editar Asoc", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Sin Editar Asoc", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
     await changeMeetingStatus(actor, id, "in_progress");
     await changeMeetingStatus(actor, id, "finished");
 
-    const { id: associationId } = await createAssociation(actor, { name: "Asociación Tardía", typeId: associationTypeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Asociación Tardía", typeId: associationTypeId });
     await expect(setMeetingAssociations(actor, id, [associationId])).rejects.toThrow(MeetingCommandError);
   });
 });
@@ -141,14 +147,14 @@ describe("resolvedor de audiencia (personas + asociaciones + organismos con jera
     const inChild = await makePerson("EnDependencia", "33000011", childOrg.id);
     const unrelated = await makePerson("SinOrganismo", "33000012");
 
-    const ids = await resolveAudienceIds({ organizationIds: [parentOrg.id] });
+    const ids = await resolveAudienceIds(actor, { organizationIds: [parentOrg.id] });
     expect(ids).toContain(inParent);
     expect(ids).toContain(inChild);
     expect(ids).not.toContain(unrelated);
   });
 
   it("combina fuentes con OR y excluye personas inactivas", async () => {
-    const { id: associationId } = await createAssociation(actor, { name: "Asociación Audiencia", typeId: associationTypeId });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Asociación Audiencia", typeId: associationTypeId });
     const memberPerson = await makePerson("MiembroAsoc", "33000020");
     await addMember(actor, associationId, memberPerson);
 
@@ -157,22 +163,22 @@ describe("resolvedor de audiencia (personas + asociaciones + organismos con jera
     const db = await getDb();
     await db.updateTable("people").set({ status: "inactive" }).where("id", "=", inactivePerson).execute();
 
-    const count = await countAudience({ associationIds: [associationId], personIds: [explicitPerson, inactivePerson] });
+    const count = await countAudience(actor, { associationIds: [associationId], personIds: [explicitPerson, inactivePerson] });
     expect(count).toBe(2); // memberPerson + explicitPerson, nunca el inactivo
 
-    const ids = await resolveAudienceIds({ associationIds: [associationId], personIds: [explicitPerson, inactivePerson] });
+    const ids = await resolveAudienceIds(actor, { associationIds: [associationId], personIds: [explicitPerson, inactivePerson] });
     expect(ids.sort()).toEqual([memberPerson, explicitPerson].sort());
   });
 
   it("sin ninguna fuente elegida, la audiencia es vacía (no 'todas')", async () => {
-    const count = await countAudience({});
+    const count = await countAudience(actor, {});
     expect(count).toBe(0);
   });
 });
 
 describe("invitaciones: idempotencia, revivir tras retirar, token en claro solo una vez", () => {
   it("re-generar la misma tanda no duplica invitaciones", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Invita", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Invita", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
     const personId = await makePerson("Invitado", "33000030");
 
@@ -191,7 +197,7 @@ describe("invitaciones: idempotencia, revivir tras retirar, token en claro solo 
   });
 
   it("retirar a alguien y volver a invitarlo revive la misma fila con un token nuevo", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Revive", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Revive", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
     const personId = await makePerson("RevivoYo", "33000031");
 
@@ -218,7 +224,7 @@ describe("invitaciones: idempotencia, revivir tras retirar, token en claro solo 
 
 describe("respuesta pública a la invitación", () => {
   it("confirma y rechaza, y ya no deja cambiar una vez que la reunión arrancó", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Pública", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Pública", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
     const personId = await makePerson("Publico", "33000040");
     const batch = await createInvitationBatch(actor, id, { personIds: [personId] });

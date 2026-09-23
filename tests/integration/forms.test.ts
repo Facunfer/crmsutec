@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -8,6 +9,7 @@ process.env.SUTECBA_PGLITE_DATA_DIR = `.data/pglite-test-${randomUUID()}`;
 const { applyMigrations, parseFlags } = await import("../../scripts/migrate.js");
 const { runSeed } = await import("../../scripts/seed.js");
 const { closeDb, getDb } = await import("../../lib/db/client.js");
+const { createTestOrganization } = await import("../helpers/organization.js");
 const { hashPassword } = await import("../../lib/auth/passwords.js");
 const { PERMISSIONS } = await import("../../lib/permissions/catalog.js");
 const {
@@ -35,9 +37,12 @@ function nextIp(): string {
   return `10.8.${Math.floor(ipCounter / 250)}.${ipCounter % 250}`;
 }
 
+let ownerOrgId: string;
+
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
+  ownerOrgId = await createTestOrganization();
 
   const db = await getDb();
   const role = await db.selectFrom("roles").select("id").where("key", "=", "MASTER_GLOBAL").executeTakeFirstOrThrow();
@@ -54,6 +59,7 @@ beforeAll(async () => {
     roleId: role.id,
     roleKey: "MASTER_GLOBAL",
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS,
   };
 });
@@ -65,7 +71,7 @@ afterAll(async () => {
 });
 
 async function makeBasicForm(name: string, slug: string, opts: { updatePolicy?: "fill_empty_only" | "always_flag_for_review" } = {}) {
-  const { id } = await createForm(actor, { name, slug });
+  const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name, slug });
   await updateFormMeta(actor, id, {
     name,
     slug,
@@ -78,19 +84,26 @@ async function makeBasicForm(name: string, slug: string, opts: { updatePolicy?: 
   });
   await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
   await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
-  await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: false, visible: true, personFieldMapping: "dni" });
+  await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
   await upsertField(actor, id, null, { key: "email", label: "Email", fieldType: "email", required: false, visible: true, personFieldMapping: "email" });
   await upsertField(actor, id, null, { key: "phone", label: "Teléfono", fieldType: "phone", required: false, visible: true, personFieldMapping: "phone" });
   return id;
 }
 
+let dniCounter = 0;
+/** DNI válido y distinto en cada llamada: el DNI es obligatorio para publicar y para crear personas. */
+function nextDni(): string {
+  dniCounter += 1;
+  return String(31000000 + dniCounter);
+}
+
 function baseEntries(overrides: Record<string, string> = {}): Record<string, string> {
-  return { first_name: "Ana", last_name: "Gomez", dni: "", email: "", phone: "", ...overrides };
+  return { first_name: "Ana", last_name: "Gomez", dni: nextDni(), email: "", phone: "", ...overrides };
 }
 
 describe("ciclo de vida del constructor: publicar exige nombre y apellido mapeados", () => {
   it("rechaza publicar sin campos, y sin mapeo a nombre/apellido", async () => {
-    const { id } = await createForm(actor, { name: "Formulario Vacío", slug: "form-vacio" });
+    const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Vacío", slug: "form-vacio" });
     await expect(publishForm(actor, id)).rejects.toThrow(FormCommandError);
 
     await upsertField(actor, id, null, { key: "algo", label: "Algo", fieldType: "text", required: false, visible: true, personFieldMapping: "" });
@@ -168,14 +181,15 @@ describe("envío público: crea, matchea (fill_empty_only) y nunca pisa un dato 
   it("un campo mapeado a un campo personalizado se guarda en people.custom_fields", async () => {
     await createFieldDefinition(actor, { key: "talle", label: "Talle de ropa", fieldType: "text" });
 
-    const { id } = await createForm(actor, { name: "Formulario Custom", slug: "form-custom" });
+    const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Custom", slug: "form-custom" });
     await updateFormMeta(actor, id, { name: "Formulario Custom", slug: "form-custom", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], updatePolicy: "fill_empty_only" });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
+    await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
     await upsertField(actor, id, null, { key: "talle_campo", label: "Talle", fieldType: "text", required: false, visible: true, personFieldMapping: "talle" });
     await publishForm(actor, id);
 
-    const result = await submitForm("form-custom", { first_name: "Bruno", last_name: "Diaz", talle_campo: "L" }, randomUUID(), nextIp(), "agent");
+    const result = await submitForm("form-custom", { first_name: "Bruno", last_name: "Diaz", dni: "30444001", talle_campo: "L" }, randomUUID(), nextIp(), "agent");
     expect(result.kind).toBe("ok");
 
     const db = await getDb();
@@ -186,16 +200,17 @@ describe("envío público: crea, matchea (fill_empty_only) y nunca pisa un dato 
   it("una acción 'sumar a asociación' se aplica a la persona creada", async () => {
     const db0 = await getDb();
     const assocType = await db0.selectFrom("association_types").select("id").where("key", "=", "comision").executeTakeFirstOrThrow();
-    const { id: associationId } = await createAssociation(actor, { name: "Asociación De Formulario", typeId: assocType.id });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Asociación De Formulario", typeId: assocType.id });
 
-    const { id } = await createForm(actor, { name: "Formulario Con Accion", slug: "form-con-accion" });
+    const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Con Accion", slug: "form-con-accion" });
     await updateFormMeta(actor, id, { name: "Formulario Con Accion", slug: "form-con-accion", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], updatePolicy: "fill_empty_only" });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
+    await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
     await addAssociationAction(actor, id, associationId);
     await publishForm(actor, id);
 
-    await submitForm("form-con-accion", { first_name: "Carla", last_name: "Ruiz" }, randomUUID(), nextIp(), "agent");
+    await submitForm("form-con-accion", { first_name: "Carla", last_name: "Ruiz", dni: "30444002" }, randomUUID(), nextIp(), "agent");
 
     const db = await getDb();
     const person = await db.selectFrom("people").selectAll().where("first_name", "=", "Carla").where("last_name", "=", "Ruiz").executeTakeFirstOrThrow();
@@ -237,7 +252,7 @@ describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a 
     const id = await makeBasicForm("Formulario Revision Nueva", "form-revision-nueva", { updatePolicy: "always_flag_for_review" });
     await publishForm(actor, id);
 
-    await submitForm("form-revision-nueva", baseEntries({ email: "compartido@example.com", first_name: "Original" }), randomUUID(), nextIp(), "agent");
+    await submitForm("form-revision-nueva", baseEntries({ email: "compartido@example.com", dni: "30333555", first_name: "Original" }), randomUUID(), nextIp(), "agent");
 
     const db = await getDb();
     const original = await db.selectFrom("people").selectAll().where("email", "=", "compartido@example.com").executeTakeFirstOrThrow();
@@ -267,7 +282,7 @@ describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a 
     await submitForm("form-revision-dni-choca", baseEntries({ dni: "30333999", first_name: "Otro" }), randomUUID(), nextIp(), "agent");
     const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", original.id).where("status", "=", "pending").executeTakeFirstOrThrow();
 
-    await expect(createNewFromCandidate(actor, candidate.id)).rejects.toThrow(/ya existe una persona con el DNI/i);
+    await expect(createNewFromCandidate(actor, candidate.id)).rejects.toThrow(/conflicto de identificación/i);
 
     // El candidato sigue pendiente: el intento fallido no lo marcó como resuelto.
     const stillPending = await db.selectFrom("person_duplicate_candidates").select("status").where("id", "=", candidate.id).executeTakeFirstOrThrow();
@@ -302,8 +317,8 @@ describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a 
     await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "sensible@example.com" }), randomUUID(), nextIp(), "agent");
     await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "otro-sensible@example.com" }), randomUUID(), nextIp(), "agent");
 
-    const withPermission = await listPendingDuplicateCandidates(true);
-    const withoutPermission = await listPendingDuplicateCandidates(false);
+    const withPermission = await listPendingDuplicateCandidates(actor, true);
+    const withoutPermission = await listPendingDuplicateCandidates(actor, false);
 
     const candidateWith = withPermission.find((c) => c.matchReason.includes("dni"));
     const candidateWithout = withoutPermission.find((c) => c.matchReason.includes("dni"));
@@ -375,7 +390,7 @@ describe("validación pública: campo obligatorio vacío y consentimiento", () =
   });
 
   it("con texto de consentimiento configurado, rechaza si no viene aceptado", async () => {
-    const { id } = await createForm(actor, { name: "Formulario Consentimiento", slug: "form-consentimiento" });
+    const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Consentimiento", slug: "form-consentimiento" });
     await updateFormMeta(actor, id, {
       name: "Formulario Consentimiento",
       slug: "form-consentimiento",
@@ -388,19 +403,20 @@ describe("validación pública: campo obligatorio vacío y consentimiento", () =
     });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
+    await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
     await publishForm(actor, id);
 
-    const withoutConsent = await submitForm("form-consentimiento", { first_name: "Dario", last_name: "Lopez" }, randomUUID(), nextIp(), "agent");
+    const withoutConsent = await submitForm("form-consentimiento", { first_name: "Dario", last_name: "Lopez", dni: "31500001" }, randomUUID(), nextIp(), "agent");
     expect(withoutConsent.kind).toBe("validation_error");
 
-    const withConsent = await submitForm("form-consentimiento", { first_name: "Dario", last_name: "Lopez", __consent: "true" }, randomUUID(), nextIp(), "agent");
+    const withConsent = await submitForm("form-consentimiento", { first_name: "Dario", last_name: "Lopez", dni: "31500001", __consent: "true" }, randomUUID(), nextIp(), "agent");
     expect(withConsent.kind).toBe("ok");
   });
 });
 
 describe("disponibilidad pública: borrador, despublicado y fuera de ventana", () => {
   it("un formulario en borrador no está disponible", async () => {
-    const { id } = await createForm(actor, { name: "Formulario Borrador", slug: "form-borrador" });
+    const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Borrador", slug: "form-borrador" });
     void id;
     const result = await getPublicForm("form-borrador");
     expect(result.kind).toBe("not_available");

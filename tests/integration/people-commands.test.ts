@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -25,6 +26,7 @@ function fakeActor(id: string) {
     roleId: "n/a",
     roleKey: "MASTER_GLOBAL" as const,
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS as ReadonlySet<any>,
   };
 }
@@ -32,7 +34,7 @@ function fakeActor(id: string) {
 let actorId: string;
 
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
 
   const db = await getDb();
@@ -89,7 +91,7 @@ describe("duplicados (sección 9: DNI bloquea, email/teléfono advierte)", () =>
     await createPerson(actor, {
       firstName: "Bruno",
       lastName: "Test",
-      dni: "",
+      dni: "30555001",
       email: "bruno.test@sutecba.local",
       phone: "",
       organizationId: "",
@@ -100,7 +102,7 @@ describe("duplicados (sección 9: DNI bloquea, email/teléfono advierte)", () =>
     const firstAttempt = await createPerson(actor, {
       firstName: "Otro",
       lastName: "Bruno",
-      dni: "",
+      dni: "30555002",
       email: "bruno.test@sutecba.local",
       phone: "",
       organizationId: "",
@@ -114,7 +116,7 @@ describe("duplicados (sección 9: DNI bloquea, email/teléfono advierte)", () =>
       {
         firstName: "Otro",
         lastName: "Bruno",
-        dni: "",
+        dni: "30555002",
         email: "bruno.test@sutecba.local",
         phone: "",
         organizationId: "",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../../lib/permissions/catalog.js";
+import { MODULES, PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../../lib/permissions/catalog.js";
 
 const PERMISSION_KEYS = new Set(PERMISSIONS.map((p) => p.key));
 
@@ -24,9 +24,13 @@ describe("catálogo de permisos (D5)", () => {
     expect(new Set(ROLE_PERMISSIONS.MASTER_GLOBAL)).toEqual(new Set(PERMISSION_KEYS));
   });
 
-  it("ADMIN tiene todo salvo roles.manage (sección 8: no puede editar roles)", () => {
-    expect(ROLE_PERMISSIONS.ADMIN).not.toContain("roles.manage");
-    expect(ROLE_PERMISSIONS.ADMIN.length).toBe(PERMISSIONS.length - 1);
+  it("ADMIN no administra organismos ni usuarios globales, pero sí usuarios y alcances propios", () => {
+    for (const key of ["organizations.manage", "users.manage", "people.assign_organization"] as const) {
+      expect(ROLE_PERMISSIONS.ADMIN).not.toContain(key);
+    }
+    expect(ROLE_PERMISSIONS.ADMIN).toContain("users.manage_scoped");
+    expect(ROLE_PERMISSIONS.ADMIN).toContain("scopes.manage");
+    expect(ROLE_PERMISSIONS.ADMIN.length).toBe(PERMISSIONS.length - 3);
   });
 
   it("LECTURA no tiene ningún permiso de creación, edición ni exportación", () => {
@@ -45,10 +49,55 @@ describe("catálogo de permisos (D5)", () => {
     expect(scoped).toEqual([]);
   });
 
-  it("solo MASTER_GLOBAL puede administrar roles", () => {
+
+  it("todo permiso tiene un moduleKey que existe en MODULES", () => {
+    const moduleKeys = new Set<string>(MODULES.map((m) => m.key));
+    for (const p of PERMISSIONS) {
+      expect(moduleKeys.has(p.moduleKey), `${p.key} apunta a un módulo inexistente: ${p.moduleKey}`).toBe(true);
+    }
+  });
+
+  it("no hay claves de módulo ni de permiso duplicadas", () => {
+    const moduleKeys = MODULES.map((m) => m.key);
+    expect(new Set(moduleKeys).size).toBe(moduleKeys.length);
+    const permissionKeys = PERMISSIONS.map((p) => p.key);
+    expect(new Set(permissionKeys).size).toBe(permissionKeys.length);
+  });
+
+  it("los 10 módulos esperados existen, con su orden", () => {
+    expect(MODULES.map((m) => [m.key, m.sortOrder])).toEqual([
+      ["dashboard", 10],
+      ["personas", 20],
+      ["asociaciones", 30],
+      ["reuniones", 40],
+      ["formularios", 50],
+      ["visualizacion", 60],
+      ["interacciones", 70],
+      ["importaciones", 80],
+      ["etiquetas", 90],
+      ["administracion", 100],
+    ]);
+  });
+
+  it("la clasificación inicial de personas sin unidad es exclusiva de MASTER_GLOBAL", () => {
     for (const role of ROLES) {
       if (role.key === "MASTER_GLOBAL") continue;
-      expect(ROLE_PERMISSIONS[role.key]).not.toContain("roles.manage");
+      expect(ROLE_PERMISSIONS[role.key], role.key).not.toContain("people.assign_organization");
+    }
+    expect(ROLE_PERMISSIONS.MASTER_GLOBAL).toContain("people.assign_organization");
+  });
+
+  it("OPERADOR no recibe los permisos reservados a ADMIN/MASTER", () => {
+    for (const key of [
+      "people.transfer",
+      "people.assign_organization",
+      "users.manage",
+      "users.manage_scoped",
+      "scopes.manage",
+      "tags.manage",
+      "organizations.manage",
+    ] as const) {
+      expect(ROLE_PERMISSIONS.OPERADOR).not.toContain(key);
     }
   });
 });

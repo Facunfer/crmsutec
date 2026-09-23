@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -8,6 +9,7 @@ process.env.SUTECBA_PGLITE_DATA_DIR = `.data/pglite-test-${randomUUID()}`;
 const { applyMigrations, parseFlags } = await import("../../scripts/migrate.js");
 const { runSeed } = await import("../../scripts/seed.js");
 const { closeDb, getDb } = await import("../../lib/db/client.js");
+const { createTestOrganization } = await import("../helpers/organization.js");
 const { hashPassword } = await import("../../lib/auth/passwords.js");
 const { PERMISSIONS } = await import("../../lib/permissions/catalog.js");
 const { createMeeting, changeMeetingStatus } = await import("../../lib/meetings/commands.js");
@@ -32,7 +34,7 @@ function futureMeetingInput(offsetMinutes = -10, durationMinutes = 90) {
   return { startsAt: toLocal(start), endsAt: toLocal(end) };
 }
 
-async function makePerson(firstName: string, lastName: string, dni: string | null, opts: { organizationId?: string; origin?: string } = {}) {
+async function makePerson(firstName: string, lastName: string, dni: string, opts: { organizationId?: string; origin?: string } = {}) {
   const db = await getDb();
   const row = await db
     .insertInto("people")
@@ -42,9 +44,12 @@ async function makePerson(firstName: string, lastName: string, dni: string | nul
   return row.id as string;
 }
 
+let ownerOrgId: string;
+
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
+  ownerOrgId = await createTestOrganization();
 
   const db = await getDb();
   const role = await db.selectFrom("roles").select("id").where("key", "=", "MASTER_GLOBAL").executeTakeFirstOrThrow();
@@ -61,6 +66,7 @@ beforeAll(async () => {
     roleId: role.id,
     roleKey: "MASTER_GLOBAL",
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS,
   };
 });
@@ -73,7 +79,7 @@ afterAll(async () => {
 
 describe("analítica de Personas: nada se traba, los conteos cierran", () => {
   it("total = activas + inactivas, y las series no rompen con la base vacía o con datos reales", async () => {
-    const empty = await getPeopleAnalytics();
+    const empty = await getPeopleAnalytics(actor);
     expect(empty.total).toBe(0);
     expect(empty.monthlySignups.length).toBe(12);
     expect(empty.monthlySignups.every((s) => s.valor === 0)).toBe(true);
@@ -84,10 +90,10 @@ describe("analítica de Personas: nada se traba, los conteos cierran", () => {
 
     const p1 = await makePerson("Ana", "Gomez", "30111001", { organizationId: org.id, origin: "manual" });
     await makePerson("Bruno", "Diaz", "30111002", { origin: "form" });
-    const p3 = await makePerson("Carla", "Ruiz", null, { origin: "import" });
+    const p3 = await makePerson("Carla", "Ruiz", "39111003", { origin: "import" });
     await db.updateTable("people").set({ status: "inactive" }).where("id", "=", p3).execute();
 
-    const analytics = await getPeopleAnalytics();
+    const analytics = await getPeopleAnalytics(actor);
     expect(analytics.total).toBe(3);
     expect(analytics.active).toBe(2);
     expect(analytics.inactive).toBe(1);
@@ -109,11 +115,11 @@ describe("analítica de Asociaciones", () => {
   it("cuenta por tipo y arma el top por cantidad de miembros", async () => {
     const db = await getDb();
     const assocType = await db.selectFrom("association_types").select("id").where("key", "=", "comision").executeTakeFirstOrThrow();
-    const { id: associationId } = await createAssociation(actor, { name: "Comisión Analítica", typeId: assocType.id });
+    const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Comisión Analítica", typeId: assocType.id });
     const personId = await makePerson("Dario", "Lopez", "30111003");
     await addMember(actor, associationId, personId);
 
-    const analytics = await getAssociationsAnalytics();
+    const analytics = await getAssociationsAnalytics(actor);
     expect(analytics.total).toBeGreaterThanOrEqual(1);
     expect(analytics.active).toBeGreaterThanOrEqual(1);
     expect(analytics.byType.some((s) => s.valor > 0)).toBe(true);
@@ -123,7 +129,7 @@ describe("analítica de Asociaciones", () => {
 
 describe("analítica de Reuniones", () => {
   it("cuenta por estado (incluida 'vencida sin cerrar' derivada) y calcula la tasa de asistencia", async () => {
-    const { id } = await createMeeting(actor, { name: "Reunión Analítica", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Analítica", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
     const personId = await makePerson("Elena", "Vega", "30111004");
     const batch = await createInvitationBatch(actor, id, { personIds: [personId] });
@@ -132,7 +138,7 @@ describe("analítica de Reuniones", () => {
 
     void batch;
 
-    const analytics = await getMeetingsAnalytics();
+    const analytics = await getMeetingsAnalytics(actor);
     expect(analytics.total).toBeGreaterThanOrEqual(1);
     expect(analytics.invited).toBeGreaterThanOrEqual(1);
     expect(analytics.attendanceRate).not.toBeNull();
@@ -148,10 +154,10 @@ describe("analítica de Reuniones", () => {
       const pad = (n: number) => String(n).padStart(2, "0");
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
-    const { id } = await createMeeting(actor, { name: "Reunión Vencida", startsAt: toLocal(past), endsAt: toLocal(pastEnd), description: "", locationName: "", address: "", notes: "" });
+    const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Vencida", startsAt: toLocal(past), endsAt: toLocal(pastEnd), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
 
-    const analytics = await getMeetingsAnalytics();
+    const analytics = await getMeetingsAnalytics(actor);
     const overdue = analytics.byStatus.find((s) => s.nombre === "Vencida sin cerrar");
     expect(overdue?.valor).toBeGreaterThanOrEqual(1);
   });
@@ -159,7 +165,7 @@ describe("analítica de Reuniones", () => {
 
 describe("analítica de Formularios", () => {
   it("no rompe sin formularios, y refleja el pendiente de revisión", async () => {
-    const analytics = await getFormsAnalytics();
+    const analytics = await getFormsAnalytics(actor);
     expect(analytics.totalForms).toBeGreaterThanOrEqual(0);
     expect(analytics.submissionsMonthly.length).toBe(12);
     expect(analytics.pendingDuplicates).toBeGreaterThanOrEqual(0);

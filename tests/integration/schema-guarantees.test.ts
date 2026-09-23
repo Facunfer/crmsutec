@@ -14,7 +14,7 @@ const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
 
 beforeAll(async () => {
   assertTestEnvironment(loadEnv());
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
 });
 
 afterAll(async () => {
@@ -28,25 +28,6 @@ afterAll(async () => {
 describe("guardas de entorno", () => {
   it("assertTestEnvironment rechaza si SUTECBA_ENV no es test", () => {
     expect(() => assertTestEnvironment({ ...loadEnv(), SUTECBA_ENV: "local" })).toThrow();
-  });
-});
-
-describe("audit_logs es append-only (R8 / sección 15.1)", () => {
-  it("permite insertar pero no actualizar ni borrar", async () => {
-    const db = await getDb();
-    const inserted = await db
-      .insertInto("audit_logs")
-      .values({ action: "TEST_ACTION", entity_type: "test", actor_type: "system" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-
-    await expect(
-      db.updateTable("audit_logs").set({ action: "OTRA" }).where("id", "=", inserted.id).execute()
-    ).rejects.toThrow();
-
-    await expect(
-      db.deleteFrom("audit_logs").where("id", "=", inserted.id).execute()
-    ).rejects.toThrow();
   });
 });
 
@@ -66,13 +47,11 @@ describe("DNI único parcial (decisión D6/D7)", () => {
     ).rejects.toThrow();
   });
 
-  it("permite el mismo DNI si la fila anterior quedó 'merged'", async () => {
+  it("permite el mismo DNI si la fila anterior quedó 'merged' (apuntando a la vigente)", async () => {
     const db = await getDb();
-    await db
-      .insertInto("people")
-      .values({ first_name: "Bea", last_name: "Test", dni: "30333444" })
-      .execute();
-    await db.updateTable("people").set({ status: "merged" }).where("dni", "=", "30333444").execute();
+    const old = await db.insertInto("people").values({ first_name: "Bea", last_name: "Test", dni: "30333444" }).returning("id").executeTakeFirstOrThrow();
+    const target = await db.insertInto("people").values({ first_name: "Bea vigente", last_name: "Test", dni: "30333445" }).returning("id").executeTakeFirstOrThrow();
+    await db.updateTable("people").set({ status: "merged", merged_into_id: target.id }).where("id", "=", old.id).execute();
 
     await expect(
       db

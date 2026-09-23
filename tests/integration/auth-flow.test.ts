@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -45,12 +46,13 @@ function fakeSessionUser(id: string, roleKey: "MASTER_GLOBAL" | "ADMIN", permiss
     roleId: "n/a",
     roleKey,
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: permissions as ReadonlySet<any>,
   };
 }
 
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
 });
 
@@ -94,7 +96,7 @@ describe("comandos de usuarios: reglas anti-bloqueo (sección 8)", () => {
       .executeTakeFirstOrThrow();
 
     const adminPermissions = new Set(
-      PERMISSIONS.map((p) => p.key).filter((k) => k !== "roles.manage")
+      PERMISSIONS.map((p) => p.key).filter((k) => k !== "organizations.manage")
     );
     const adminActor = fakeSessionUser(adminUser.id, "ADMIN", adminPermissions);
 

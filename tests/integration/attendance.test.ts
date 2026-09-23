@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env.SUTECBA_ENV = "test";
@@ -9,6 +10,7 @@ process.env.SUTECBA_QR_SECRET = "test-secret-not-for-prod-0123456789";
 const { applyMigrations, parseFlags } = await import("../../scripts/migrate.js");
 const { runSeed } = await import("../../scripts/seed.js");
 const { closeDb, getDb } = await import("../../lib/db/client.js");
+const { createTestOrganization } = await import("../helpers/organization.js");
 const { hashPassword } = await import("../../lib/auth/passwords.js");
 const { createMeeting, changeMeetingStatus, regenerateQrSecret } = await import("../../lib/meetings/commands.js");
 const { createInvitationBatch } = await import("../../lib/meetings/invitations.js");
@@ -41,7 +43,7 @@ function activeMeetingInput() {
 }
 
 async function makeInProgressMeeting(name: string, opts: { allowUninvitedCheckin?: boolean } = {}) {
-  const { id } = await createMeeting(actor, {
+  const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId,
     name,
     ...activeMeetingInput(),
     description: "",
@@ -61,15 +63,18 @@ async function makePerson(firstName: string, lastName: string, dni: string) {
   const db = await getDb();
   const row = await db
     .insertInto("people")
-    .values({ first_name: firstName, last_name: lastName, dni })
+    .values({ first_name: firstName, last_name: lastName, dni, organization_id: ownerOrgId })
     .returning("id")
     .executeTakeFirstOrThrow();
   return row.id as string;
 }
 
+let ownerOrgId: string;
+
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
   await runSeed();
+  ownerOrgId = await createTestOrganization();
 
   const db = await getDb();
   const role = await db.selectFrom("roles").select("id").where("key", "=", "MASTER_GLOBAL").executeTakeFirstOrThrow();
@@ -91,6 +96,7 @@ beforeAll(async () => {
     roleId: role.id,
     roleKey: "MASTER_GLOBAL",
     mustChangePassword: false,
+    enabledModules: ALL_MODULE_KEYS,
     permissions: ALL_PERMISSIONS,
   };
 });
@@ -183,7 +189,8 @@ describe("personas no invitadas", () => {
     const { id: restrictedId } = await makeInProgressMeeting("Reunión Solo Invitados");
     const uninvited = await makePerson("Dario", "Lopez", "30111555");
     const rejected = await identifyForCheckin(restrictedId, "30111555", "Lopez", nextIp());
-    expect(rejected.kind).toBe("not_invited");
+    // Una persona existente pero no invitada es indistinguible de una que no existe.
+    expect(rejected.kind).toBe("not_found");
 
     const { id: openId } = await makeInProgressMeeting("Reunión Abierta", { allowUninvitedCheckin: true });
     const allowed = await identifyForCheckin(openId, "30111555", "Lopez", nextIp());

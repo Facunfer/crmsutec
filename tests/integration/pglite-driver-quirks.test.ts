@@ -11,7 +11,7 @@ const { closeDb, getDb } = await import("../../lib/db/client.js");
 const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
 
 beforeAll(async () => {
-  await applyMigrations(parseFlags([]));
+  await applyMigrations(parseFlags(["--allow-destructive"]));
 });
 
 afterAll(async () => {
@@ -33,7 +33,7 @@ describe("cuidado: numUpdatedRows no es confiable con PGlite", () => {
     const db = await getDb();
     const created = await db
       .insertInto("people")
-      .values({ first_name: "Quirk", last_name: "Test" })
+      .values({ first_name: "Quirk", last_name: "Test", dni: "50000001" })
       .returning("id")
       .executeTakeFirstOrThrow();
 
@@ -53,7 +53,7 @@ describe("cuidado: numUpdatedRows no es confiable con PGlite", () => {
     const db = await getDb();
     const created = await db
       .insertInto("people")
-      .values({ first_name: "Quirk2", last_name: "Test" })
+      .values({ first_name: "Quirk2", last_name: "Test", dni: "50000002" })
       .returning("id")
       .executeTakeFirstOrThrow();
 
