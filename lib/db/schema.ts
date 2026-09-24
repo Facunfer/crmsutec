@@ -499,6 +499,13 @@ export interface PersonInteractionsTable {
   occurred_at: Date;
   /** date_only: occurred_at es el inicio del día (00:00 Buenos Aires); no se inventa una hora. */
   occurred_precision: Generated<"exact_datetime" | "date_only">;
+  /**
+   * 'actual' (default): occurred_at es la fecha real de la actividad. 'legacy_reference': occurred_at es la fecha
+   * técnica 2026-01-01 (nunca una fecha real de asistencia) — exclusivo de participaciones legacy_initial_import sin
+   * fecha real usable (migración 0029). Solo la app puede fijarlo desde el flujo correcto; un trigger de base lo
+   * verifica contra meeting_participations en cada INSERT/UPDATE.
+   */
+  date_basis: Generated<"actual" | "legacy_reference">;
   /** Clave lógica de las interacciones automáticas (idempotencia): meeting_participation:<id> | meeting_attendance:<id>. */
   source_key: string | null;
   interaction_type_id: string;

@@ -145,6 +145,34 @@ export function assertNoDestructiveWithoutFlag(
   }
 }
 
+/**
+ * Guarda 6: `next dev` nunca debe terminar conectado a producción (incidente 2026-09-24: un intento de login desde
+ * un `next dev` local escribió una fila real en `login_attempts` de producción).
+ *
+ * Causa raíz, auditada: `next dev`/`build`/`start` cargan `.env` por su cuenta vía `@next/env` (ver comentario de
+ * `loadDotEnvFile` en lib/db/env.ts), ANTES de que el código de esta app corra. `SUTECBA_ENV_FILE` (nuestro propio
+ * mecanismo para no leer el `.env` real) solo lo respeta `loadEnv()` — nunca al cargador de Next, que ya dejó
+ * `SUTECBA_ENV`/`SUTECBA_DATABASE_URL` en `process.env` para cuando `loadEnv()` se ejecuta. Exportar esas variables
+ * "vacías" en la shell tampoco alcanza: un valor vacío falla la validación de `envSchema` en vez de quedar sin
+ * definir. La única señal confiable para distinguir "esto es next dev" es `NODE_ENV`: Next.js la fija a
+ * `"development"` él mismo para `next dev` (nunca se puede pisar desde un `.env`), y a `"production"` para
+ * `next build`/`next start`. Los scripts sueltos (`tsx scripts/migrate.ts`, etc.) no la tocan, así que esta guarda
+ * nunca los alcanza — ellos ya tienen su propia guarda (`assertProductionConfirmed`, con `--yes` explícito).
+ *
+ * Por eso: si `NODE_ENV=development` (inequívocamente `next dev`) Y el entorno resuelto es `SUTECBA_ENV=production`,
+ * es exactamente la combinación imposible-de-querer que causó el incidente — abortar antes de abrir ninguna
+ * conexión, para cualquier request.
+ */
+export function assertNoDevServerAgainstProduction(env: SutecbaEnv): void {
+  if (process.env.NODE_ENV === "development" && env.SUTECBA_ENV === "production") {
+    throw new GuardViolationError(
+      "El servidor de desarrollo (next dev) resolvió SUTECBA_ENV=production: nunca debe conectarse a la base " +
+        "productiva. Next.js carga el `.env` real antes que SUTECBA_ENV_FILE pueda evitarlo — revisá qué `.env` " +
+        "hay en este directorio y usá SUTECBA_ENV=local (o test) para desarrollo. Conexión abortada."
+    );
+  }
+}
+
 /** Solo para tests de integración: la base debe estar marcada como de test. */
 export function assertTestEnvironment(env: SutecbaEnv): void {
   if (env.SUTECBA_ENV !== "test") {

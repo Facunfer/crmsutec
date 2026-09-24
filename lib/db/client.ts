@@ -5,6 +5,7 @@ import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { unaccent } from "@electric-sql/pglite/contrib/unaccent";
 import { Pool } from "pg";
 import { assertServerOnly } from "../server-only.js";
+import { assertNoDevServerAgainstProduction } from "./guards.js";
 import { loadEnv, resolvePgliteDataDir } from "./env.js";
 import { bootstrapSupabaseRolesForPglite, shouldBootstrapPgliteCompat } from "./pglite-bootstrap.js";
 import type { Database } from "./schema.js";
@@ -59,6 +60,7 @@ async function buildConnection(): Promise<{
   pglite: KyselyPGlite | null;
 }> {
   const env = loadEnv();
+  assertNoDevServerAgainstProduction(env);
 
   if (env.SUTECBA_DATABASE_URL) {
     // Postgres real (staging/producción, o un local que el usuario levantó
