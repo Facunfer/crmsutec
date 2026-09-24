@@ -33,6 +33,7 @@ export async function createMeeting(actor: SessionUser, input: CreateMeetingInpu
       location_name: input.locationName?.trim() || null,
       address: input.address?.trim() || null,
       notes: input.notes?.trim() || null,
+      meeting_type: input.meetingType ?? "reunion",
       organizer_user_id: actor.id,
       status: "draft",
       qr_mode: input.qrMode ?? "rotating",

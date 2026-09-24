@@ -1,17 +1,20 @@
 "use client";
 
 import { useActionState } from "react";
-import type { OrganizationOption } from "@/lib/organizations/queries";
+import type { AreaOption, OrgTreeOption } from "@/lib/organizations/areas";
+import { AreaReparticionSelect } from "@/components/organizations/AreaReparticionSelect";
 import { createMeetingAction, type MeetingActionResult } from "./acciones";
 
 const initialState: MeetingActionResult = { ok: false };
 
 export function CreateMeetingForm({
   preselectedAssociationId,
-  organizations,
+  areas,
+  orgTree,
 }: {
   preselectedAssociationId?: string;
-  organizations: OrganizationOption[];
+  areas: AreaOption[];
+  orgTree: OrgTreeOption[];
 }) {
   const [state, formAction, pending] = useActionState(createMeetingAction, initialState);
 
@@ -23,14 +26,14 @@ export function CreateMeetingForm({
         <input name="name" required className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
       </div>
       <div>
-        <label className="block text-xs text-brand-500">Unidad organizativa *</label>
-        <select name="ownerOrganizationId" required className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm">
-          {organizations.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
+        <label className="block text-xs text-brand-500">Tipo de actividad *</label>
+        <select name="meetingType" required defaultValue="reunion" className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm">
+          <option value="reunion">Reunión</option>
+          <option value="capacitacion">Capacitación</option>
         </select>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <AreaReparticionSelect areas={areas} tree={orgTree} name="ownerOrganizationId" areaLabel="Área *" reparticionLabel="Repartición" required />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>

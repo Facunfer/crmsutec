@@ -10,6 +10,9 @@ export const meetingInputSchema = z
     locationName: z.string().trim().optional().or(z.literal("")),
     address: z.string().trim().optional().or(z.literal("")),
     notes: z.string().trim().optional().or(z.literal("")),
+    // Solo lo usa la creación manual (punto 5): "Reunión" o "Capacitación". Los demás valores de meeting_type
+    // (operativo_salud, jornada, evento, otro) son exclusivos de la carga histórica y no se ofrecen acá.
+    meetingType: z.enum(["reunion", "capacitacion"]).optional(),
     qrMode: z.enum(["static", "rotating"]).optional(),
     checkinToleranceBeforeMinutes: z.coerce.number().int().min(0).max(240).optional(),
     checkinToleranceAfterMinutes: z.coerce.number().int().min(0).max(240).optional(),
@@ -34,6 +37,7 @@ export function parseMeetingForm(formData: FormData): MeetingInput {
     locationName: String(formData.get("locationName") ?? ""),
     address: String(formData.get("address") ?? ""),
     notes: String(formData.get("notes") ?? ""),
+    meetingType: formData.has("meetingType") ? String(formData.get("meetingType")) : undefined,
     qrMode: formData.has("qrMode") ? String(formData.get("qrMode")) : undefined,
     checkinToleranceBeforeMinutes: formData.has("checkinToleranceBeforeMinutes")
       ? String(formData.get("checkinToleranceBeforeMinutes"))

@@ -4,7 +4,7 @@ import { can } from "@/lib/permissions/can";
 import { listMeetings, type MeetingListFilter } from "@/lib/meetings/queries";
 import { STATUS_LABEL } from "@/lib/meetings/state-machine";
 import { formatMeetingWhen } from "@/lib/meetings/when";
-import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
+import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
 import { CreateMeetingForm } from "./CreateMeetingForm";
 
 function formatDateTime(date: Date): string {
@@ -31,6 +31,8 @@ export default async function ReunionesPage({
   const preselectedAssociationId = sp.associationId || undefined;
 
   const meetings = await listMeetings(actor, filter);
+  const orgTree = can(actor, "meetings.create") ? await listOrgTreeOptions(actor) : [];
+  const areas = can(actor, "meetings.create") ? await listAreaOptions(actor, orgTree) : [];
 
   return (
     <div className="space-y-6">
@@ -39,10 +41,7 @@ export default async function ReunionesPage({
       </div>
 
       {can(actor, "meetings.create") ? (
-        <CreateMeetingForm
-          preselectedAssociationId={preselectedAssociationId}
-          organizations={await listOwnerOrganizationOptions(actor.id)}
-        />
+        <CreateMeetingForm preselectedAssociationId={preselectedAssociationId} areas={areas} orgTree={orgTree} />
       ) : null}
 
       <div className="flex flex-wrap gap-2 text-sm">
