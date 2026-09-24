@@ -85,7 +85,14 @@ export default async function ReunionesPage({
                 <td className="py-2 pr-4">{formatMeetingWhen(m)}</td>
                 <td className="py-2 pr-4">{m.locationName ?? "—"}</td>
                 <td className="py-2 pr-4">{m.organizerName ?? "—"}</td>
-                <td className="py-2 pr-4">{m.participantsCount}</td>
+                <td className="py-2 pr-4">
+                  {m.participantsCount}
+                  {m.campaignParticipantsCount !== null && m.campaignParticipantsCount > 0 ? (
+                    <Link href={`/reuniones/${m.id}`} className="ml-1 text-xs text-brand-500 hover:underline" title="Participantes de la misma campaña sin jornada determinada: no se les adivinó el día, pero participaron.">
+                      (+{m.campaignParticipantsCount} sin jornada)
+                    </Link>
+                  ) : null}
+                </td>
                 <td className="py-2 pr-4">{m.invitedCount}</td>
                 <td className="py-2 pr-4">{m.confirmedCount}</td>
                 <td className="py-2 pr-4">

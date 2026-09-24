@@ -23,7 +23,13 @@ export interface MeetingListItem {
   /** Solo invitados/confirmados y participantes DENTRO del alcance del usuario (nunca los de otras áreas). */
   invitedCount: number;
   confirmedCount: number;
+  /** Asignados a ESTA jornada puntual (meeting_id = esta reunión). Nunca incluye a quienes quedaron solo a nivel de
+   * campaña sin jornada determinada: ver `campaignParticipantsCount`. */
   participantsCount: number;
+  /** Participantes de la MISMA campaña (Oftalmología u otra) sin jornada asignada a ninguna reunión — para que la
+   * lista nunca dé la impresión de que la actividad no tuvo a nadie solo porque no se sabe a qué día corresponden.
+   * `null` cuando la actividad no pertenece a ninguna campaña (no es de tipo campaña histórica). */
+  campaignParticipantsCount: number | null;
 }
 
 export interface MeetingListFilter {
@@ -73,6 +79,19 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
         select count(distinct mp.person_id)::int from meeting_participations mp
         where mp.meeting_id = meetings.id and ${personInScope(actor, "mp.person_id")}
       )`.as("participants_count"),
+      // Misma campaña (regex idéntica a campaignKeyOfMeeting en lib/meetings/participants.ts), sin jornada asignada
+      // a ninguna reunión: null si esta actividad no pertenece a ninguna campaña histórica.
+      sql<number | null>`(
+        case
+          when (regexp_match(meetings.source_event_key, '^ophthalmology:(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|sin-fecha):(.+)$')) is null then null
+          else (
+            select count(distinct mp2.person_id)::int from meeting_participations mp2
+            where mp2.meeting_id is null
+              and mp2.campaign_key = 'ophthalmology:' || (regexp_match(meetings.source_event_key, '^ophthalmology:(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|sin-fecha):(.+)$'))[1]
+              and ${personInScope(actor, "mp2.person_id")}
+          )
+        end
+      )`.as("campaign_participants_count"),
       ({ fn }) => fn.count<number>("meeting_invitations.id").as("invited_count"),
       ({ fn, eb }) =>
         fn
@@ -110,6 +129,7 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
       invitedCount: Number(r.invited_count),
       confirmedCount: Number(r.confirmed_count),
       participantsCount: Number(r.participants_count),
+      campaignParticipantsCount: r.campaign_participants_count === null ? null : Number(r.campaign_participants_count),
     };
   });
 

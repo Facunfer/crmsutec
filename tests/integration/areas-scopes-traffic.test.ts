@@ -306,6 +306,18 @@ describe("Reuniones de SUTECBA vistas por un usuario de área", () => {
     expect(master_.assigned.some((p) => p.firstName === "cTeatro1")).toBe(false);
   });
 
+  it("PUNTO 8: el listado de reuniones nunca da la impresión de 'sin participantes' cuando hay gente a nivel de campaña", async () => {
+    const master_ = (await listMeetings(master, { status: "all" })).find((m) => m.id === M.canale)!;
+    expect(master_.participantsCount).toBe(1); // cRaiz, asignada a ESTA jornada
+    expect(master_.campaignParticipantsCount).toBe(2); // cTeatro1 + hDgtal, sin jornada determinada
+    const c = (await listMeetings(cultura, { status: "all" })).find((m) => m.id === M.canale)!;
+    expect(c.campaignParticipantsCount).toBe(1); // solo cTeatro1 dentro del alcance de Cultura
+
+    // Una reunión que NO es de ninguna campaña histórica (p. ej. cursoRCP, training:*) no ofrece este número.
+    const rcp = (await listMeetings(master, { status: "all" })).find((m) => m.name === "cursoRCP")!;
+    expect(rcp.campaignParticipantsCount).toBeNull();
+  });
+
   it("una reunión cuyos únicos inscriptos del usuario están a nivel de campaña se ve, y ahí aparecen SIN jornada asignada (solo los de su alcance)", async () => {
     const c = await listMeetingParticipants(cultura, M.soloCampana!);
     expect(c.assigned).toEqual([]);
