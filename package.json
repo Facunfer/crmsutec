@@ -27,6 +27,8 @@
     "gabriel:review-reports": "tsx scripts/gabriel-review-reports.ts",
     "people:fix-birth-dates": "tsx scripts/fix-birth-dates.ts",
     "legacy:reconcile-participations": "tsx scripts/legacy-reconcile-participations.ts",
+    "legacy:reconcile-interactions": "tsx scripts/reconcile-legacy-reference-interactions.ts",
+    "legacy:preview-interactions": "tsx scripts/preview-legacy-reference-interactions.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
