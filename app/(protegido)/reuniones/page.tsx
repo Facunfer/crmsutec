@@ -68,7 +68,7 @@ export default async function ReunionesPage({
               <th className="py-2 pr-4 font-medium">Inicio</th>
               <th className="py-2 pr-4 font-medium">Lugar</th>
               <th className="py-2 pr-4 font-medium">Organizador</th>
-              <th className="py-2 pr-4 font-medium">Participantes</th>
+              <th className="py-2 pr-4 font-medium" title="Incluye a quienes participaron de la campaña sin jornada determinada, cuando corresponde.">Participantes</th>
               <th className="py-2 pr-4 font-medium">Invitados</th>
               <th className="py-2 pr-4 font-medium">Confirmados</th>
               <th className="py-2 pr-4 font-medium">Estado</th>
@@ -86,12 +86,17 @@ export default async function ReunionesPage({
                 <td className="py-2 pr-4">{m.locationName ?? "—"}</td>
                 <td className="py-2 pr-4">{m.organizerName ?? "—"}</td>
                 <td className="py-2 pr-4">
-                  {m.participantsCount}
-                  {m.campaignParticipantsCount !== null && m.campaignParticipantsCount > 0 ? (
-                    <Link href={`/reuniones/${m.id}`} className="ml-1 text-xs text-brand-500 hover:underline" title="Participantes de la misma campaña sin jornada determinada: no se les adivinó el día, pero participaron.">
-                      (+{m.campaignParticipantsCount} sin jornada)
-                    </Link>
-                  ) : null}
+                  <Link
+                    href={`/reuniones/${m.id}`}
+                    className="hover:underline"
+                    title={
+                      m.campaignParticipantsCount !== null && m.campaignParticipantsCount > 0
+                        ? `Incluye ${m.campaignParticipantsCount} persona(s) que participaron de la campaña sin jornada determinada (no se les adivinó el día). Ver detalle.`
+                        : undefined
+                    }
+                  >
+                    {m.participantsCount + (m.campaignParticipantsCount ?? 0)}
+                  </Link>
                 </td>
                 <td className="py-2 pr-4">{m.invitedCount}</td>
                 <td className="py-2 pr-4">{m.confirmedCount}</td>
