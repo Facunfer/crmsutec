@@ -11,7 +11,6 @@ import {
 import { TrafficBadge } from "../TrafficBadge";
 import { applyMasking } from "@/lib/people/masking";
 import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
-import { listActiveOrganizationOptions } from "@/lib/organizations/queries";
 import { PersonForm, type PersonFormInitialValues } from "../PersonForm";
 import { TransferPanel } from "./TransferPanel";
 import { updatePersonAction } from "../acciones";
@@ -47,9 +46,8 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const masked = applyMasking(person, canSeeSensitive);
   const { age, estimated } = computeDisplayAge(person);
 
-  const [orgTree, allOrganizations, meetingActivity, formSubmissions, traffic] = await Promise.all([
+  const [orgTree, meetingActivity, formSubmissions, traffic] = await Promise.all([
     listOrgTreeOptions(actor),
-    can(actor, "people.transfer") ? listActiveOrganizationOptions() : Promise.resolve([]),
     getPersonMeetingActivity(actor, id),
     getPersonFormSubmissions(actor, id),
     getPersonTraffic(actor, id),
@@ -95,7 +93,9 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
               <TrafficBadge light={traffic.trafficLight} />
               <span>
                 {traffic.lastInteractionDate
-                  ? `Última interacción: ${traffic.lastInteractionDate} (hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
+                  ? traffic.lastInteractionBasis === "legacy_reference"
+                    ? `Fecha de referencia: ${traffic.lastInteractionDate} (carga histórica, no es una fecha de asistencia comprobada — hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
+                    : `Última interacción: ${traffic.lastInteractionDate} (hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
                   : "Nunca interactuamos"}
               </span>
             </p>
@@ -109,7 +109,7 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
       {person.organizationId && can(actor, "people.transfer") ? (
         <section className="rounded-lg bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-brand-900">Traslado de repartición</h2>
-          <TransferPanel personId={id} currentOrganizationId={person.organizationId} destinations={allOrganizations} />
+          <TransferPanel personId={id} currentOrganizationId={person.organizationId} areas={areas} orgTree={orgTree} />
         </section>
       ) : null}
 

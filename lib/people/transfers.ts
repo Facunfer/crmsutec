@@ -3,7 +3,7 @@ import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import { can, isMasterGlobal, type SessionUser } from "../permissions/can.js";
-import { canAccessPerson, isUuid, orgScope } from "../scope/organizations.js";
+import { canAccessOrganization, canAccessPerson, hasGlobalScope, isUuid, orgScope } from "../scope/organizations.js";
 import { isOwnerOrganization, OWNER_AS_WORK_UNIT_MESSAGE } from "../organizations/areas.js";
 import { PersonCommandError } from "./commands.js";
 
@@ -23,10 +23,16 @@ async function withDbRuleErrors<T>(run: () => Promise<T>): Promise<T> {
 
 /**
  * Traslada a una persona de su repartición actual a otra (`transfer_person`,
- * migración 0015). Semántica: la repartición destino pasa a ver la ficha; la de
+ * migración 0015/0030). Semántica: la repartición destino pasa a ver la ficha; la de
  * origen deja de verla y conserva solo la constancia (ver `listTransferReceipts`);
  * las interacciones ya registradas conservan su unidad propietaria original, así
- * que la unidad nueva NO las ve. El destino puede ser cualquier unidad activa.
+ * que la unidad nueva NO las ve.
+ *
+ * Decisión de negocio 2026-09-24: Master Global puede trasladar entre cualquier área. Un usuario con alcance
+ * limitado solo puede trasladar personas cuyo ORIGEN y DESTINO estén ambos dentro de su alcance (antes solo se
+ * exigía el origen); si necesita mover a alguien fuera de su alcance, debe pedirle a Master Global. Esta función
+ * valida el destino en la app (mensaje de error más claro); `transfer_person` (0030) repite la misma validación en
+ * la base como garantía real, no solo de UI.
  *
  * Además de las validaciones de la base (permiso, alcance sobre el origen,
  * motivo obligatorio), acá se exige `people.transfer` con su módulo y que la
@@ -42,6 +48,9 @@ export async function transferPerson(
 
   if (!isUuid(toOrganizationId) || !(await canAccessPerson(actor, personId))) {
     throw new PersonCommandError("La persona no existe.");
+  }
+  if (!hasGlobalScope(actor) && !(await canAccessOrganization(actor, toOrganizationId))) {
+    throw new PersonCommandError("No tenés alcance sobre la repartición destino. Pedile a un Master Global que haga este traslado.", "VALIDATION");
   }
   if (await isOwnerOrganization(toOrganizationId)) throw new PersonCommandError(OWNER_AS_WORK_UNIT_MESSAGE, "VALIDATION");
 

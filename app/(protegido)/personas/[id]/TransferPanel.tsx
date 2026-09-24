@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import type { OrganizationOption } from "@/lib/organizations/queries";
+import type { AreaOption, OrgTreeOption } from "@/lib/organizations/areas";
+import { AreaReparticionSelect } from "@/components/organizations/AreaReparticionSelect";
 import {
   assignInitialOrganizationAction,
   transferPersonAction,
@@ -13,32 +14,30 @@ const initialState: TransferActionResult = { ok: false };
 export function TransferPanel({
   personId,
   currentOrganizationId,
-  destinations,
+  areas,
+  orgTree,
 }: {
   personId: string;
   currentOrganizationId: string | null;
-  destinations: OrganizationOption[];
+  /** Ya acotadas al alcance del actor (mismas que arma la ficha para PersonForm): el servidor vuelve a validar el
+   * destino igual (lib/people/transfers.ts + transfer_person en la base, migración 0030). */
+  areas: AreaOption[];
+  orgTree: OrgTreeOption[];
 }) {
   const [state, formAction, pending] = useActionState(
     (currentOrganizationId ? transferPersonAction : assignInitialOrganizationAction).bind(null, personId),
     initialState
   );
-  const options = destinations.filter((o) => o.id !== currentOrganizationId);
 
   return (
     <form action={formAction} className="flex flex-wrap items-end gap-3">
-      <div>
-        <label className="block text-xs text-brand-500">
-          {currentOrganizationId ? "Trasladar a" : "Asignar unidad"}
-        </label>
-        <select name="organizationId" required className="mt-1 rounded-md border border-brand-200 px-2 py-1.5 text-sm">
-          {options.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      <AreaReparticionSelect
+        areas={areas}
+        tree={orgTree.filter((o) => o.id !== currentOrganizationId)}
+        areaLabel={currentOrganizationId ? "Trasladar a Área" : "Área"}
+        reparticionLabel="Repartición"
+        required
+      />
       {currentOrganizationId ? (
         <div>
           <label className="block text-xs text-brand-500">Motivo (obligatorio)</label>

@@ -49,7 +49,7 @@ export async function exportPeopleCsv(
         masked.phone ?? "",
         masked.areaName ?? "",
         masked.reparticionName ?? "",
-        masked.lastInteractionDate ?? "",
+        masked.lastInteractionDate ? (masked.lastInteractionBasis === "legacy_reference" ? `${masked.lastInteractionDate} (referencial, no comprobada)` : masked.lastInteractionDate) : "",
         TRAFFIC_CSV[masked.trafficLight] ?? "",
         age !== null ? String(age) : "",
         STATUS_LABEL[masked.status] ?? masked.status,

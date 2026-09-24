@@ -61,6 +61,7 @@ export default async function PersonasPage({
       areaName: row.areaName,
       reparticionName: row.reparticionName,
       lastInteractionDate: row.lastInteractionDate,
+      lastInteractionBasis: row.lastInteractionBasis,
       daysSinceInteraction: row.daysSinceInteraction,
       trafficLight: row.trafficLight,
       status: masked.status,

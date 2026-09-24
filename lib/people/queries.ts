@@ -45,17 +45,26 @@ const BA = "America/Argentina/Buenos_Aires";
  * Última interacción REAL de la persona: interacciones válidas (abiertas o completadas, no futuras, no anuladas) dentro
  * del alcance del usuario (unidad propietaria de la interacción). Una inscripción NO cuenta: las participaciones entran
  * solo cuando se confirmaron y generaron su interacción (lib/interactions/participation-sync.ts).
+ *
+ * `basis` (migración 0029): de qué interacción sale la fecha — 'actual' (real) o 'legacy_reference' (fecha técnica
+ * 2026-01-01 de la carga histórica, nunca una fecha de asistencia comprobada). Se elige la fila con el día más
+ * reciente (ORDER BY...LIMIT 1, no un MAX ciego) para poder devolver también SU basis; en el empate improbable de
+ * mismo día, se prefiere 'actual'. La UI nunca debe mostrar una fecha referencial como si fuera real: ver
+ * `getPersonTraffic`/`PersonListRow.lastInteractionBasis`.
  */
 function lastInteractionLateral(actor: SessionUser) {
-  return sql<{ last_date: string | null; days: number | null }>`(
+  return sql<{ last_date: string | null; days: number | null; basis: "actual" | "legacy_reference" | null }>`(
     select to_char(m.d, 'YYYY-MM-DD') as last_date,
-           ${interactionAgeDays(sql`m.d`)} as days
+           ${interactionAgeDays(sql`m.d`)} as days,
+           m.basis
     from (
-      select max(${interactionDay(sql`pi.occurred_at`)}) as d
+      select ${interactionDay(sql`pi.occurred_at`)} as d, pi.date_basis as basis
       from person_interactions pi
       where pi.person_id = people.id
         and ${validInteraction()}
         and ${orgScope(actor, "pi.owner_organization_id")}
+      order by 1 desc, (case when pi.date_basis = 'actual' then 0 else 1 end) asc
+      limit 1
     ) m
   )`.as("li");
 }
@@ -178,8 +187,11 @@ export interface PersonListRow {
   areaName: string | null;
   /** Repartición específica: null cuando la unidad guardada ES el Área (o no hay unidad). */
   reparticionName: string | null;
-  /** Fecha de la última interacción real (AAAA-MM-DD, Buenos Aires) y días transcurridos; null si nunca hubo. */
+  /** Fecha de la última interacción (AAAA-MM-DD, Buenos Aires) y días transcurridos; null si nunca hubo. */
   lastInteractionDate: string | null;
+  /** 'actual' = fecha real; 'legacy_reference' = fecha técnica 2026-01-01 de la carga histórica (NUNCA una fecha de
+   * asistencia comprobada — la UI debe rotularla como referencial, nunca mostrarla como si fuera real). */
+  lastInteractionBasis: "actual" | "legacy_reference" | null;
   daysSinceInteraction: number | null;
   trafficLight: TrafficLight;
   createdAt: Date;
@@ -210,6 +222,7 @@ function toListRow(r: any, names: ReadonlyMap<string, string>): PersonListRow {
     areaName: displayOf(names, r.area_id, r.area_name),
     reparticionName: r.reparticion_name === null || r.reparticion_name === undefined ? null : displayOf(names, r.unit_id, r.reparticion_name),
     lastInteractionDate: r.last_interaction_date ?? null,
+    lastInteractionBasis: r.last_interaction_basis ?? null,
     daysSinceInteraction: days,
     trafficLight: trafficLightOf(days),
     createdAt: r.created_at,
@@ -238,6 +251,7 @@ const extraColumns = () => [
   sql<string | null>`case when organizations.parent_id is null then null else organizations.name end`.as("reparticion_name"),
   sql<string | null>`li.last_date`.as("last_interaction_date"),
   sql<number | null>`li.days`.as("days"),
+  sql<"actual" | "legacy_reference" | null>`li.basis`.as("last_interaction_basis"),
 ];
 
 export interface TrafficKpis {
@@ -322,7 +336,7 @@ export async function listAllMatching(
   return (rows as any[]).map((r) => toListRow(r, names));
 }
 
-export interface PersonDetail extends Omit<PersonListRow, "lastInteractionDate" | "daysSinceInteraction" | "trafficLight"> {
+export interface PersonDetail extends Omit<PersonListRow, "lastInteractionDate" | "lastInteractionBasis" | "daysSinceInteraction" | "trafficLight"> {
   organizationId: string | null;
   customFields: Record<string, unknown>;
   origin: string;
@@ -489,18 +503,24 @@ export function computeDisplayAge(person: {
   return { age: null, estimated: false };
 }
 
-/** Semáforo de UNA persona (misma definición que la grilla): null si no existe o está fuera del alcance. */
+/** Semáforo de UNA persona (misma definición que la grilla): null si no existe o está fuera del alcance. `lastInteractionBasis`
+ * distingue fecha real de la fecha técnica de referencia (2026-01-01): la UI nunca debe mostrar esta última como si
+ * fuera una fecha de asistencia comprobada. */
 export async function getPersonTraffic(
   actor: SessionUser,
   personId: string
-): Promise<{ lastInteractionDate: string | null; daysSinceInteraction: number | null; trafficLight: TrafficLight } | null> {
+): Promise<{ lastInteractionDate: string | null; lastInteractionBasis: "actual" | "legacy_reference" | null; daysSinceInteraction: number | null; trafficLight: TrafficLight } | null> {
   if (!isUuid(personId)) return null;
   const db = await getDb();
   const row = await applyFilters(db, actor, { status: "all" })
     .where("people.id", "=", personId)
-    .select([sql<string | null>`li.last_date`.as("last_date"), sql<number | null>`li.days`.as("days")])
+    .select([
+      sql<string | null>`li.last_date`.as("last_date"),
+      sql<number | null>`li.days`.as("days"),
+      sql<"actual" | "legacy_reference" | null>`li.basis`.as("basis"),
+    ])
     .executeTakeFirst();
   if (!row) return null;
   const days = row.days === null || row.days === undefined ? null : Number(row.days);
-  return { lastInteractionDate: row.last_date ?? null, daysSinceInteraction: days, trafficLight: trafficLightOf(days) };
+  return { lastInteractionDate: row.last_date ?? null, lastInteractionBasis: row.basis ?? null, daysSinceInteraction: days, trafficLight: trafficLightOf(days) };
 }
