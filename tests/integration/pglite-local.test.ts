@@ -49,7 +49,9 @@ describe("PGlite local limpio (SUTECBA_ENV=local)", () => {
     expect(out).toContain("0026_revoke_public_meeting_participation_privileges.sql OK");
     expect(out).toContain("0027_import_files_size_and_metadata.sql OK");
     expect(out).toContain("0028_participation_basis_legacy_initial_import.sql OK");
-    expect(out).toContain("4 migración(es) aplicada(s)");
+    expect(out).toContain("0029_legacy_reference_date_basis.sql OK");
+    expect(out).toContain("0030_transfer_person_destination_scope.sql OK");
+    expect(out).toContain("6 migración(es) aplicada(s)");
     expect(status).toBe(0);
   }, 300000);
 

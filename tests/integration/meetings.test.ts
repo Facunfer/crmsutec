@@ -108,6 +108,18 @@ describe("ABM y máquina de estados (integración)", () => {
     ).rejects.toThrow(MeetingCommandError);
   });
 
+  it("tipo de actividad: 'reunion' por defecto; 'capacitacion' si se elige; editar nunca lo toca", async () => {
+    const db = await getDb();
+    const byDefault = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Sin tipo elegido", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    expect((await db.selectFrom("meetings").select("meeting_type").where("id", "=", byDefault.id).executeTakeFirstOrThrow()).meeting_type).toBe("reunion");
+
+    const training = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Capacitación elegida", meetingType: "capacitacion", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    expect((await db.selectFrom("meetings").select("meeting_type").where("id", "=", training.id).executeTakeFirstOrThrow()).meeting_type).toBe("capacitacion");
+
+    await updateMeeting(actor, training.id, { name: "Capacitación editada", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
+    expect((await db.selectFrom("meetings").select("meeting_type").where("id", "=", training.id).executeTakeFirstOrThrow()).meeting_type).toBe("capacitacion");
+  });
+
   it("al finalizar, las invitaciones sin respuesta de asistencia quedan 'absent' (se congela el resultado)", async () => {
     const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Finaliza", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");

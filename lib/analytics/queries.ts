@@ -61,6 +61,11 @@ export interface PeopleAnalytics {
   active: number;
   inactive: number;
   byOrigin: Serie[];
+  /** Agrupado por Área/ministerio (punto 7: vista principal de Visualización). "Sin organismo" incluye a quienes no
+   * tienen unidad asignada. Usa `organization_area_id` (migración 0024), la misma definición de Área que el resto del
+   * sistema — nunca un agrupamiento propio de esta pantalla. */
+  byArea: Serie[];
+  /** Desglose por Repartición específica (para expandir un Área). */
   byOrganization: Serie[];
   monthlySignups: Serie[];
   missingDni: number;
@@ -73,9 +78,17 @@ export async function getPeopleAnalytics(actor: SessionUser): Promise<PeopleAnal
   const db = await getDb();
   const inScope = orgScope(actor, "people.organization_id");
 
-  const [statusRows, originRows, orgRows, monthRows, missing] = await Promise.all([
+  const [statusRows, originRows, areaRows, orgRows, monthRows, missing] = await Promise.all([
     db.selectFrom("people").where(inScope).select(["status", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("status").execute(),
     db.selectFrom("people").where(inScope).select(["origin", ({ fn }) => fn.count<number>("id").as("count")]).groupBy("origin").execute(),
+    sql<{ name: string; count: string }>`
+      select coalesce(a.name, 'Sin organismo') as name, count(*) as count
+      from people p
+      left join organizations a on a.id = public.organization_area_id(p.organization_id)
+      where ${orgScope(actor, "p.organization_id")} and p.status != 'merged'
+      group by a.name
+      order by count(*) desc
+    `.execute(db),
     db
       .selectFrom("people")
       .where(inScope)
@@ -120,6 +133,7 @@ export async function getPeopleAnalytics(actor: SessionUser): Promise<PeopleAnal
     active: Number(active),
     inactive: Number(inactive),
     byOrigin: originRows.map((r) => ({ nombre: ORIGIN_LABEL[r.origin] ?? r.origin, valor: Number(r.count) })),
+    byArea: areaRows.rows.map((r) => ({ nombre: r.name, valor: Number(r.count) })),
     byOrganization: orgRows.map((r) => ({ nombre: r.name, valor: Number(r.count) })),
     monthlySignups: fillMonthlySeries(new Map(monthRows.map((r) => [r.month, Number(r.count)]))),
     missingDni: Number(missing.missing_dni),
@@ -354,5 +368,75 @@ export async function getDashboardCounts(actor: SessionUser): Promise<DashboardC
     invited: Number(invited.count),
     confirmed: Number(confirmed.count),
     submissions: Number(submissions.count),
+  };
+}
+
+export interface ParticipationInteractionKpis {
+  /** TODAS las filas de meeting_participations en el alcance, cualquier participation_kind (incluye 'registration'
+   * que convive con su 'participated' agregada por la carga histórica: cada una es una fila física distinta). */
+  physicalParticipationRows: number;
+  /** Solo 'attended' o 'participated': la participación REAL, sin contar 'registration'/'invited'/'absent'/'approved'
+   * como si fueran participaciones — evita el doble conteo entre 'registration' y su 'participated' agregada. */
+  logicalParticipations: number;
+  uniquePeopleParticipated: number;
+  /** person_interactions válidas (abiertas o completadas) en el alcance. */
+  totalInteractions: number;
+  uniquePeopleWithInteraction: number;
+  /** Personas cuya interacción MÁS RECIENTE es real (date_basis='actual'). */
+  peopleWithRealLastInteraction: number;
+  /** Personas cuya interacción más reciente es SOLO la fecha técnica de referencia (nunca tuvieron una real después). */
+  peopleWithReferentialOnlyLastInteraction: number;
+}
+
+/**
+ * KPIs de participación e interacciones (punto 4): separa conceptos que hoy se confunden fácilmente — personas
+ * únicas vs. filas físicas vs. participaciones lógicas vs. interacciones — para que ningún número se lea como otro.
+ * Todo sobre el mismo alcance que el resto del dashboard/Visualización (`orgScope`).
+ */
+export async function getParticipationInteractionKpis(actor: SessionUser): Promise<ParticipationInteractionKpis> {
+  const db = await getDb();
+  const peopleScope = orgScope(actor, "p.organization_id");
+
+  const [physical, logical, interactions, basis] = await Promise.all([
+    sql<{ n: number }>`
+      select count(*)::int as n
+      from meeting_participations mp
+      join people p on p.id = mp.person_id
+      where ${peopleScope}
+    `.execute(db),
+    sql<{ n: number; people: number }>`
+      select count(*)::int as n, count(distinct mp.person_id)::int as people
+      from meeting_participations mp
+      join people p on p.id = mp.person_id
+      where mp.participation_kind in ('attended', 'participated') and ${peopleScope}
+    `.execute(db),
+    sql<{ n: number; people: number }>`
+      select count(*)::int as n, count(distinct pi.person_id)::int as people
+      from person_interactions pi
+      join people p on p.id = pi.person_id
+      where pi.status in ('open', 'completed') and ${peopleScope}
+    `.execute(db),
+    sql<{ real_count: number; referential_only_count: number }>`
+      with li as (
+        select p.id,
+          (select pi.date_basis from person_interactions pi
+           where pi.person_id = p.id and pi.status in ('open', 'completed')
+           order by pi.occurred_at desc limit 1) as basis
+        from people p where ${peopleScope}
+      )
+      select count(*) filter (where basis = 'actual')::int as real_count,
+             count(*) filter (where basis = 'legacy_reference')::int as referential_only_count
+      from li
+    `.execute(db),
+  ]);
+
+  return {
+    physicalParticipationRows: physical.rows[0]?.n ?? 0,
+    logicalParticipations: logical.rows[0]?.n ?? 0,
+    uniquePeopleParticipated: logical.rows[0]?.people ?? 0,
+    totalInteractions: interactions.rows[0]?.n ?? 0,
+    uniquePeopleWithInteraction: interactions.rows[0]?.people ?? 0,
+    peopleWithRealLastInteraction: basis.rows[0]?.real_count ?? 0,
+    peopleWithReferentialOnlyLastInteraction: basis.rows[0]?.referential_only_count ?? 0,
   };
 }

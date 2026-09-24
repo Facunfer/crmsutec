@@ -451,8 +451,9 @@ describe("historial de reuniones de una persona trasladada", () => {
     if (identified.kind !== "need_confirmation") throw new Error("debía pedir confirmación");
     expect((await confirmCheckin(identified.confirmToken, nextIp(), "test")).kind).toBe("ok");
 
-    // Después se la traslada a B.
-    await transferPerson(adminA, id("pHist"), o("B"), "Cambio de destino");
+    // Después se la traslada a B (0030: el destino también debe estar en el alcance del actor; adminA no llega a B,
+    // así que el traslado lo hace Master Global, como corresponde ahora entre áreas sin alcance compartido).
+    await transferPerson(master, id("pHist"), o("B"), "Cambio de destino");
 
     // El historial de la reunión de A conserva el nombre...
     const invitations = await invitationsLib.listInvitations(adminA, id("mOpen"));

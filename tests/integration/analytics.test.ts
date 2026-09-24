@@ -17,7 +17,8 @@ const { createInvitationBatch } = await import("../../lib/meetings/invitations.j
 const { checkInWithInvitationToken } = await import("../../lib/attendance/checkin.js");
 const { createAssociation } = await import("../../lib/associations/commands.js");
 const { addMember } = await import("../../lib/associations/members.js");
-const { getPeopleAnalytics, getAssociationsAnalytics, getMeetingsAnalytics, getFormsAnalytics } = await import("../../lib/analytics/queries.js");
+const { getPeopleAnalytics, getAssociationsAnalytics, getMeetingsAnalytics, getFormsAnalytics, getParticipationInteractionKpis } = await import("../../lib/analytics/queries.js");
+const { sql } = await import("kysely");
 
 const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
 const ALL_PERMISSIONS = new Set(PERMISSIONS.map((p) => p.key));
@@ -101,6 +102,10 @@ describe("analítica de Personas: nada se traba, los conteos cierran", () => {
     expect(analytics.byOrganization.find((s) => s.nombre === "Ministerio Analítica")?.valor).toBe(1);
     // Bruno no tiene organismo ni DNI... espera, Bruno sí tiene DNI; probamos "sin organismo" con Bruno.
     expect(analytics.byOrganization.find((s) => s.nombre === "Sin organismo")).toBeTruthy();
+    // byArea (punto 7): "Ministerio Analítica" es raíz (sin parent_id), así que es su propia Área.
+    expect(analytics.byArea.find((s) => s.nombre === "Ministerio Analítica")?.valor).toBe(1);
+    expect(analytics.byArea.find((s) => s.nombre === "Sin organismo")).toBeTruthy();
+    expect(analytics.byArea.reduce((acc, s) => acc + s.valor, 0)).toBe(3);
     expect(analytics.missingOrganization).toBeGreaterThanOrEqual(1); // al menos Bruno (activo, sin organismo)
 
     const currentMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
@@ -160,6 +165,45 @@ describe("analítica de Reuniones", () => {
     const analytics = await getMeetingsAnalytics(actor);
     const overdue = analytics.byStatus.find((s) => s.nombre === "Vencida sin cerrar");
     expect(overdue?.valor).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("KPIs de participación e interacciones (punto 4: sin doble conteo, real vs referencial)", () => {
+  it("distingue filas físicas de participaciones lógicas, y última interacción real de solo-referencial", async () => {
+    const db = await getDb();
+    const typeRow = await db.selectFrom("interaction_types").select("id").where("key", "=", "participation").executeTakeFirstOrThrow();
+    const meeting = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Actividad KPIs", ...futureMeetingInput(-120, 60), description: "", locationName: "", address: "", notes: "" });
+
+    // P1: 'registration' (histórica) + su 'participated' agregada -> 2 filas físicas, 1 participación lógica, con
+    // interacción de fecha REAL.
+    const p1 = await makePerson("Kpi", "Uno", "30111101");
+    await db.insertInto("meeting_participations").values({ meeting_id: meeting.id, person_id: p1, participation_kind: "registration", evidence: null } as never).execute();
+    const p1participated = await db.insertInto("meeting_participations").values({ meeting_id: meeting.id, person_id: p1, participation_kind: "participated", participation_basis: "legacy_initial_import", evidence: null } as never).returning("id").executeTakeFirstOrThrow();
+    await db.insertInto("person_interactions").values({ person_id: p1, owner_organization_id: ownerOrgId, occurred_at: new Date(), occurred_precision: "exact_datetime", date_basis: "actual", interaction_type_id: typeRow.id, subject: "Participó (fecha real)", status: "completed", created_by: actor.id, meeting_id: meeting.id, source_key: `meeting_participation:${p1participated.id}` } as never).execute();
+
+    // P2: solo 'attended' (flujo estándar) -> 1 fila física = 1 participación lógica, con interacción real (un
+    // check-in real nunca es referencial: el trigger de 0029 solo permite legacy_reference sobre 'legacy_initial_import').
+    const p2 = await makePerson("Kpi", "Dos", "30111102");
+    const p2attended = await db.insertInto("meeting_participations").values({ meeting_id: meeting.id, person_id: p2, participation_kind: "attended", evidence: "Evidencia" } as never).returning("id").executeTakeFirstOrThrow();
+    await db.insertInto("person_interactions").values({ person_id: p2, owner_organization_id: ownerOrgId, occurred_at: new Date(), occurred_precision: "exact_datetime", date_basis: "actual", interaction_type_id: typeRow.id, subject: "Asistió (check-in real)", status: "completed", created_by: actor.id, meeting_id: meeting.id, source_key: `meeting_participation:${p2attended.id}` } as never).execute();
+
+    // P4: participación de campaña histórica sin jornada -> interacción SOLO con fecha de referencia (01/01/2026).
+    const p4 = await makePerson("Kpi", "Cuatro", "30111104");
+    const p4participated = await db.insertInto("meeting_participations").values({ meeting_id: null, campaign_key: "ophthalmology:kpi-test", person_id: p4, participation_kind: "participated", participation_basis: "legacy_initial_import", evidence: null } as never).returning("id").executeTakeFirstOrThrow();
+    await db.insertInto("person_interactions").values({ person_id: p4, owner_organization_id: ownerOrgId, occurred_at: sql`('2026-01-01'::date::timestamp at time zone 'America/Argentina/Buenos_Aires')`, occurred_precision: "date_only", date_basis: "legacy_reference", interaction_type_id: typeRow.id, subject: "Participó (fecha referencial)", status: "completed", created_by: actor.id, meeting_id: null, source_key: `meeting_participation:${p4participated.id}` } as never).execute();
+
+    // Ruido: una 'invited' sin confirmar no debe contar como participación lógica.
+    const p3 = await makePerson("Kpi", "Tres", "30111103");
+    await db.insertInto("meeting_participations").values({ meeting_id: meeting.id, person_id: p3, participation_kind: "invited", evidence: null } as never).execute();
+
+    const kpis = await getParticipationInteractionKpis(actor);
+    expect(kpis.physicalParticipationRows).toBeGreaterThanOrEqual(4); // registration + participated + attended + invited
+    expect(kpis.logicalParticipations).toBeGreaterThanOrEqual(2); // participated + attended, nunca registration/invited
+    expect(kpis.uniquePeopleParticipated).toBeGreaterThanOrEqual(2);
+    expect(kpis.totalInteractions).toBeGreaterThanOrEqual(2);
+    expect(kpis.uniquePeopleWithInteraction).toBeGreaterThanOrEqual(2);
+    expect(kpis.peopleWithRealLastInteraction).toBeGreaterThanOrEqual(1);
+    expect(kpis.peopleWithReferentialOnlyLastInteraction).toBeGreaterThanOrEqual(1);
   });
 });
 

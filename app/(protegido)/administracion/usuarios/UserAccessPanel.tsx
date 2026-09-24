@@ -56,7 +56,12 @@ export function UserAccessPanel({
   return (
     <div className="space-y-2 text-xs text-brand-700">
       <div>
-        <span className="font-medium">Alcances:</span>{" "}
+        <span className="font-medium">Datos a los que puede acceder:</span>{" "}
+        <p className="mb-1 mt-0.5 text-brand-400">
+          Cada unidad que ve, sumada. &quot;+ dependientes&quot; significa que también ve TODAS las unidades por debajo de esa en el árbol (p. ej. dar una Repartición con
+          dependientes da acceso a sus sub-áreas, aunque no se agreguen una por una). Agregar un alcance de otra Área NO le saca lo que ya tenía: los alcances se suman, nunca se
+          reemplazan entre sí.
+        </p>
         {access.scopes.length === 0 ? <span className="text-brand-400">ninguno</span> : null}
         {access.scopes.map((scope) => (
           <span key={scope.id} className="mr-2 inline-block rounded-full bg-brand-50 px-2 py-0.5">
@@ -76,7 +81,7 @@ export function UserAccessPanel({
                 </option>
               ))}
             </select>
-            <label className="flex items-center gap-1">
+            <label className="flex items-center gap-1" title="Ve también todas las unidades dependientes de la elegida, no solo esa unidad puntual.">
               <input type="checkbox" name="includeDescendants" /> incluye dependientes
             </label>
             <button type="submit" disabled={scopePending} className="text-brand-600 hover:underline">
@@ -88,7 +93,10 @@ export function UserAccessPanel({
       </div>
 
       <div>
-        <span className="font-medium">Módulos:</span>{" "}
+        <span className="font-medium">Módulos habilitados:</span>{" "}
+        <p className="mb-1 mt-0.5 text-brand-400">
+          Un módulo por sí solo no da permisos: solo habilita la sección del sistema (p. ej. &quot;Reuniones&quot;). Lo que puede hacer ahí adentro lo define el rol.
+        </p>{" "}
         {access.modules.length === 0 ? <span className="text-brand-400">ninguno</span> : null}
         {access.modules.map((module) => (
           <span key={module.id} className="mr-2 inline-block rounded-full bg-brand-50 px-2 py-0.5">

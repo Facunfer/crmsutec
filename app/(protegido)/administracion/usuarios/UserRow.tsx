@@ -1,8 +1,10 @@
 "use client";
 
 import { useActionState, type ReactNode } from "react";
-import type { RoleKey } from "@/lib/permissions/catalog";
+import { ROLE_PERMISSIONS, ROLES, type RoleKey } from "@/lib/permissions/catalog";
 import type { UserListItem } from "@/lib/users/queries";
+
+const ROLE_NAME: Record<string, string> = Object.fromEntries(ROLES.map((r) => [r.key, r.name]));
 import { resetAccessAction, toggleActiveAction, updateRoleAction, type ActionResult } from "./acciones";
 
 const initialState: ActionResult = { ok: false };
@@ -56,7 +58,7 @@ export function UserRow({
           >
             {assignableRoles.map((role) => (
               <option key={role} value={role}>
-                {role}
+                {ROLE_NAME[role] ?? role}
               </option>
             ))}
           </select>
@@ -70,6 +72,7 @@ export function UserRow({
             </button>
           ) : null}
         </form>
+        <p className="mt-1 text-xs text-brand-400">{(ROLE_PERMISSIONS[user.roleKey] ?? []).length} permiso(s) efectivo(s) por el rol</p>
         {roleState.error ? <p className="mt-1 text-xs text-estado-riesgo">{roleState.error}</p> : null}
       </td>
       <td className="py-2 pr-4">

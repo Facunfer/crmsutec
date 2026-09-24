@@ -29,7 +29,8 @@ export default async function VisualizacionPage() {
         </div>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <LineChartCard title="Altas por mes (últimos 12 meses)" data={people.monthlySignups} />
-          <BarChartCard title="Por organismo (top 10)" data={people.byOrganization} layout="vertical" />
+          <BarChartCard title="Por Área / ministerio" data={people.byArea} layout="vertical" />
+          <BarChartCard title="Desglose por Repartición (top 10)" data={people.byOrganization} layout="vertical" />
           <BarChartCard title="Por origen" data={people.byOrigin} />
           <div className="rounded-lg bg-white p-4 shadow-sm">
             <h3 className="mb-3 text-sm font-semibold text-brand-900">Completitud de datos (personas activas)</h3>

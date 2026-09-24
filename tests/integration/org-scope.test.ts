@@ -674,7 +674,13 @@ describe("formularios públicos y traslados", () => {
     expect(await people.getPersonById(adminA, id("pA1"))).not.toBeNull();
     expect(await people.getPersonById(adminB, id("pA1"))).toBeNull();
 
-    await transferPerson(adminA, id("pA1"), o("B"), "Cambio de destino");
+    // Decisión 2026-09-24 (migración 0030): un ADMIN con alcance limitado no puede trasladar fuera de SU alcance —
+    // ni origen ni destino. adminA tiene A (origen, OK) pero no B (destino): rechazado tanto en la app como en la base.
+    await expect(transferPerson(adminA, id("pA1"), o("B"), "Intento fuera de alcance")).rejects.toThrow(/alcance/i);
+    expect(await people.getPersonById(adminA, id("pA1"))).not.toBeNull(); // no se movió
+
+    // Solo MASTER_GLOBAL puede trasladar entre áreas sin alcance compartido.
+    await transferPerson(master, id("pA1"), o("B"), "Cambio de destino");
 
     expect(await people.getPersonById(adminB, id("pA1"))).not.toBeNull();
     expect(await people.getPersonById(adminA, id("pA1"))).toBeNull();
@@ -706,6 +712,9 @@ describe("formularios públicos y traslados", () => {
   it("solo MASTER_GLOBAL o quien tiene el permiso y el alcance puede trasladar", async () => {
     await expect(transferPerson(userA1, id("pA2"), o("B"), "sin permiso")).rejects.toThrow();
     await expect(transferPerson(adminB, id("pA2"), o("B1"), "fuera de alcance")).rejects.toThrow(/no existe/);
-    await expect(transferPerson(adminA, id("pA2"), o("B"), "")).rejects.toThrow(/motivo/i);
+    // Destino también fuera de su alcance (0030): rechazado por eso, no llega a validar el motivo.
+    await expect(transferPerson(adminA, id("pA2"), o("B"), "motivo cualquiera")).rejects.toThrow(/alcance/i);
+    // Con un destino dentro de su alcance, ahora sí llega a validar que el motivo no puede estar vacío.
+    await expect(transferPerson(adminA, id("pA2"), o("A1"), "")).rejects.toThrow(/motivo/i);
   });
 });
