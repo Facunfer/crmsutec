@@ -353,8 +353,13 @@ export async function runTandasImport(db: Db, files: ExtractedFile[], options: T
         }
         updates.push({ id: rowId, person: personId, status: "applied", campaign, meeting, kind: fact?.kind ?? null });
       }
-      for (const u of updates) {
-        await trx.updateTable("import_rows").set({ person_id: u.person, status: u.status as never, campaign_key: u.campaign, meeting_id: u.meeting, participation_kind: u.kind as never }).where("id", "=", u.id).execute();
+      // Una sola sentencia por bloque (un UPDATE por fila sería ~180.000 viajes de red contra Supabase).
+      if (updates.length) {
+        await sql`
+          update import_rows r set person_id = v.person_id, status = v.status, campaign_key = v.campaign, meeting_id = v.meeting, participation_kind = v.kind
+          from (select unnest(${updates.map((u) => u.id)}::uuid[]) as id, unnest(${updates.map((u) => u.person)}::uuid[]) as person_id, unnest(${updates.map((u) => u.status)}::text[]) as status,
+                       unnest(${updates.map((u) => u.campaign)}::text[]) as campaign, unnest(${updates.map((u) => u.meeting)}::uuid[]) as meeting, unnest(${updates.map((u) => u.kind)}::text[]) as kind) v
+          where r.id = v.id`.execute(trx);
       }
       if (links.length) {
         const ins = await trx.insertInto("import_entity_links").values(links).onConflict((oc) => oc.doNothing()).returning("id").execute();
