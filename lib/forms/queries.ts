@@ -234,7 +234,7 @@ export async function listSubmissions(actor: SessionUser, formId: string): Promi
     matchResult: r.match_result,
     // Si la persona vinculada ya no está en el alcance del usuario (p. ej. se la trasladó), no se muestra.
     personId: r.person_visible ? r.person_id : null,
-    personName: r.person_visible && r.first_name ? `${r.first_name} ${r.last_name}` : null,
+    personName: r.person_visible && r.last_name ? `${r.first_name} ${r.last_name}`.trim() : null,
     rawPayload: canSeeSensitive
       ? ((r.raw_payload ?? {}) as Record<string, unknown>)
       : maskSubmissionPayload(
@@ -297,7 +297,7 @@ export async function listPendingDuplicateCandidates(actor: SessionUser, canSeeS
     id: r.id,
     // La persona propuesta puede ser de otra unidad: no se revela quién es.
     personId: r.person_visible ? r.person_id : null,
-    personName: r.person_visible && r.first_name ? `${r.first_name} ${r.last_name}` : null,
+    personName: r.person_visible && r.last_name ? `${r.first_name} ${r.last_name}`.trim() : null,
     submissionId: r.submission_id,
     formId: r.form_id,
     formName: r.form_name,

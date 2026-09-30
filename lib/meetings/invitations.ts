@@ -76,7 +76,7 @@ export async function createInvitationBatch(
     idsNeedingNames.length > 0
       ? await db.selectFrom("people").select(["id", "first_name", "last_name"]).where("id", "in", idsNeedingNames).execute()
       : [];
-  const nameById = new Map(peopleToName.map((p) => [p.id, `${p.first_name} ${p.last_name}`]));
+  const nameById = new Map(peopleToName.map((p) => [p.id, `${p.first_name} ${p.last_name}`.trim()]));
 
   const links: CreatedInvitationLink[] = [];
 

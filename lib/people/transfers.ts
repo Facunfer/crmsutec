@@ -141,7 +141,7 @@ export async function listTransferReceipts(actor: SessionUser): Promise<Transfer
   return rows.map((r) => ({
     transferId: r.id,
     transferredAt: r.transferred_at,
-    personName: `${r.first_name} ${r.last_name}`,
+    personName: `${r.first_name} ${r.last_name}`.trim(),
     personId: r.person_visible ? r.person_id : null,
     fromOrganizationName: r.from_name,
     toOrganizationName: r.to_name,

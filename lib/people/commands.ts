@@ -67,7 +67,10 @@ export interface NormalizedPersonInput {
   declaredAge: number | null;
 }
 
-export function normalizePersonInput(input: PersonInput): NormalizedPersonInput {
+export function normalizePersonInput(input: PersonInput, options: { allowEmptyFirstName?: boolean } = {}): NormalizedPersonInput {
+  if (!input.firstName.trim() && !options.allowEmptyFirstName) {
+    throw new PersonCommandError("El nombre es obligatorio.", "VALIDATION");
+  }
   // El DNI es obligatorio para toda persona (0021): sin DNI no hay persona. La base lo vuelve a exigir
   // (NOT NULL + formato), pero acá se corta antes con un mensaje claro.
   if (!input.dni || !input.dni.trim()) {
@@ -132,7 +135,7 @@ export async function findDuplicates(
     const match = await q.executeTakeFirst();
     if (match) {
       dniBlockedBy = match.in_scope
-        ? { id: match.id, name: `${match.first_name} ${match.last_name}`, inScope: true }
+        ? { id: match.id, name: `${match.first_name} ${match.last_name}`.trim(), inScope: true }
         : { id: "", name: "una persona de otra unidad", inScope: false };
     }
   }
@@ -148,7 +151,7 @@ export async function findDuplicates(
     if (excludePersonId) q = q.where("id", "!=", excludePersonId);
     const match = await q.executeTakeFirst();
     if (match) {
-      warnings.push({ field: "email", personId: match.id, personName: `${match.first_name} ${match.last_name}` });
+      warnings.push({ field: "email", personId: match.id, personName: `${match.first_name} ${match.last_name}`.trim() });
     }
   }
   if (normalized.phone) {
@@ -161,7 +164,7 @@ export async function findDuplicates(
     if (excludePersonId) q = q.where("id", "!=", excludePersonId);
     const match = await q.executeTakeFirst();
     if (match) {
-      warnings.push({ field: "phone", personId: match.id, personName: `${match.first_name} ${match.last_name}` });
+      warnings.push({ field: "phone", personId: match.id, personName: `${match.first_name} ${match.last_name}`.trim() });
     }
   }
 
@@ -255,8 +258,11 @@ export async function updatePerson(
   // Sin people.view_sensitive el DNI/email/teléfono llegan enmascarados o vacíos: se parte de los valores
   // guardados (el DNI sigue siendo obligatorio y no se puede borrar ni cambiar a ciegas).
   const sensitiveAllowed = can(actor, "people.view_sensitive");
+  // Persona con nombre sin separar (0032): puede guardarse sin nombre siempre que el texto original no cambie.
+  const keepsUnsplit = existing.name_split_status === "unsplit" && !input.firstName.trim() && input.lastName.trim() === existing.last_name;
   const normalized = normalizePersonInput(
-    sensitiveAllowed ? input : { ...input, dni: existing.dni, email: existing.email ?? "", phone: existing.phone ?? "" }
+    sensitiveAllowed ? input : { ...input, dni: existing.dni, email: existing.email ?? "", phone: existing.phone ?? "" },
+    { allowEmptyFirstName: keepsUnsplit }
   );
 
   // La repartición no se cambia editando la ficha: un cambio deja historial y
@@ -294,8 +300,10 @@ export async function updatePerson(
   const updated = await db
     .updateTable("people")
     .set({
-      first_name: normalized.firstName,
-      last_name: normalized.lastName,
+      // Sin separar: se conserva el texto original tal cual. Si se carga nombre y apellido, pasa a 'split' (el original queda).
+      ...(keepsUnsplit
+        ? {}
+        : { first_name: normalized.firstName, last_name: normalized.lastName, ...(existing.name_split_status === "unsplit" ? { name_split_status: "split" as const } : {}) }),
       dni: normalized.dni,
       email: normalized.email,
       phone: normalized.phone,

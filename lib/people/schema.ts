@@ -7,7 +7,8 @@ import { z } from "zod";
  * de "qué es válido" es este esquema.
  */
 export const personInputSchema = z.object({
-  firstName: z.string().trim().min(1, "El nombre es obligatorio."),
+  // Puede venir vacío SOLO al editar una persona con nombre sin separar (0032); createPerson/updatePerson lo exigen si no.
+  firstName: z.string().trim(),
   lastName: z.string().trim().min(1, "El apellido es obligatorio."),
   // Forma tolerante a propósito: un usuario sin people.view_sensitive edita con el campo deshabilitado (no viaja).
   // La OBLIGATORIEDAD la exige el dominio (normalizePersonInput / updatePerson) y PostgreSQL (NOT NULL + formato).

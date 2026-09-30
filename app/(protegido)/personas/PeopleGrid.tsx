@@ -76,7 +76,7 @@ export function PeopleGrid({
 
   const columnDefs = useMemo<ColDef<PersonDisplayRow>[]>(
     () => [
-      { headerName: "Nombre", sortable: false, filter: false, flex: 1.2, valueGetter: (p) => (p.data ? `${p.data.lastName}, ${p.data.firstName}` : "") },
+      { headerName: "Nombre", sortable: false, filter: false, flex: 1.2, valueGetter: (p) => (p.data ? [p.data.lastName, p.data.firstName].filter(Boolean).join(", ") : "") },
       { field: "dni", headerName: "DNI", sortable: false, filter: false, width: 120 },
       { field: "areaName", headerName: "Área", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },
       { field: "reparticionName", headerName: "Repartición", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },

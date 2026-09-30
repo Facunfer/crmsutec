@@ -61,6 +61,7 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const initialValues: PersonFormInitialValues = {
     firstName: person.firstName,
     lastName: person.lastName,
+    nameUnsplit: person.nameSplitStatus === "unsplit",
     // Sin people.view_sensitive, ni el formulario de edición muestra el
     // valor real — el servidor además ignora estos campos si se los
     // manda igual (ver updatePerson en lib/people/commands.ts).

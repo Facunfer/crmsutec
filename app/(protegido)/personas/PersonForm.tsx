@@ -11,6 +11,8 @@ const initialState: PersonActionResult = { ok: false };
 export interface PersonFormInitialValues {
   firstName: string;
   lastName: string;
+  /** Nombre completo original sin separar (0032): el Apellido contiene el texto entero y el Nombre puede quedar vacío. */
+  nameUnsplit?: boolean;
   dni: string;
   email: string;
   phone: string;
@@ -58,16 +60,16 @@ export function PersonForm({
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs text-brand-500">Nombre *</label>
+          <label className="block text-xs text-brand-500">Nombre {initialValues.nameUnsplit ? "" : "*"}</label>
           <input
             name="firstName"
-            required
+            required={!initialValues.nameUnsplit}
             defaultValue={initialValues.firstName}
             className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs text-brand-500">Apellido *</label>
+          <label className="block text-xs text-brand-500">{initialValues.nameUnsplit ? "Nombre completo (sin separar en la fuente) *" : "Apellido *"}</label>
           <input
             name="lastName"
             required

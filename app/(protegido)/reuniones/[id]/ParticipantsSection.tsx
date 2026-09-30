@@ -39,7 +39,7 @@ function Table({ rows }: { rows: MeetingParticipant[] }) {
             <tr key={p.personId} className="border-b border-brand-50">
               <td className="py-1.5 pr-4">
                 <Link href={`/personas/${p.personId}`} className="text-brand-700 hover:underline">
-                  {p.lastName}, {p.firstName}
+                  {[p.lastName, p.firstName].filter(Boolean).join(", ")}
                 </Link>
               </td>
               <td className="py-1.5 pr-4">{p.dni ?? "—"}</td>

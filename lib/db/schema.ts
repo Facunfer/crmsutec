@@ -159,6 +159,9 @@ export interface PeopleTable {
   cuil_cuit: string | null;
   /** Procedencia del DNI (0021): explícito o derivado de cuil_cuit. El origen de la persona está en `origin`. */
   dni_source: Generated<"explicit" | "derived_from_cuil">;
+  /** 0032: 'unsplit' = solo se conoce el nombre completo original (first_name='' y last_name=full_name_original). */
+  name_split_status: Generated<"split" | "unsplit">;
+  full_name_original: string | null;
   email: string | null;
   phone: string | null;
   organization_id: string | null;
@@ -603,7 +606,7 @@ export interface ImportBatchFilesTable {
 export type ParticipationKind = "registration" | "invited" | "attended" | "absent" | "approved" | "unknown" | "participated";
 /** 'standard': flujo normal (invitación, check-in, corrección manual). 'legacy_initial_import': decisión de negocio
  * exclusiva de la carga histórica inicial de Gabriel (solo junto con participation_kind='participated'). */
-export type ParticipationBasis = "standard" | "legacy_initial_import";
+export type ParticipationBasis = "standard" | "legacy_initial_import" | "source_business_rule";
 
 export type ImportRowStatus =
   | "staged"
@@ -669,6 +672,19 @@ export interface MeetingParticipationsTable {
   participation_basis: Generated<ParticipationBasis>;
 }
 
+export interface PersonObservationsTable {
+  id: Generated<string>;
+  person_id: string;
+  /** minúsculas y guion bajo, p. ej. «colegio_votacion». */
+  category: string;
+  value: string;
+  source_kind: Generated<"import" | "manual">;
+  import_row_id: string | null;
+  source_note: string | null;
+  created_by: string;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   roles: RolesTable;
   modules: ModulesTable;
@@ -705,6 +721,7 @@ export interface Database {
   person_organization_transfers: PersonOrganizationTransfersTable;
   tags: TagsTable;
   person_tags: PersonTagsTable;
+  person_observations: PersonObservationsTable;
   interaction_types: InteractionTypesTable;
   interaction_channels: InteractionChannelsTable;
   person_interactions: PersonInteractionsTable;

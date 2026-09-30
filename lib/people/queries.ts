@@ -338,6 +338,7 @@ export async function listAllMatching(
 
 export interface PersonDetail extends Omit<PersonListRow, "lastInteractionDate" | "lastInteractionBasis" | "daysSinceInteraction" | "trafficLight"> {
   organizationId: string | null;
+  nameSplitStatus: "split" | "unsplit";
   customFields: Record<string, unknown>;
   origin: string;
   version: number;
@@ -361,6 +362,7 @@ export async function getPersonById(actor: SessionUser, id: string): Promise<Per
       "people.id",
       "people.first_name",
       "people.last_name",
+      "people.name_split_status",
       "people.dni",
       "people.email",
       "people.phone",
@@ -386,6 +388,8 @@ export async function getPersonById(actor: SessionUser, id: string): Promise<Per
     id: row.id,
     firstName: row.first_name,
     lastName: row.last_name,
+    /** 'unsplit': solo se conoce el nombre completo original (guardado en lastName); ver migración 0032. */
+    nameSplitStatus: row.name_split_status,
     dni: row.dni,
     email: row.email,
     phone: row.phone,

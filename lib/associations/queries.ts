@@ -197,7 +197,7 @@ export async function listManagers(actor: SessionUser, associationId: string): P
     userId: r.user_id,
     userName: r.user_name,
     personId: r.person_id,
-    personName: r.first_name ? `${r.first_name} ${r.last_name}` : null,
+    personName: r.last_name ? `${r.first_name} ${r.last_name}`.trim() : null,
   }));
 }
 
