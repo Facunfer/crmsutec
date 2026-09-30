@@ -48,7 +48,8 @@ async function main() {
       const chk = await admin.query("select count(*)::int n from pg_constraint where conname in ('meeting_participations_basis_check','meeting_participations_participated_requires_basis_check','meeting_participations_source_rule_requires_evidence_check','people_name_split_status_check','people_name_split_consistency_check','person_observations_unique')");
       add("CHECKs de 0031–0033 presentes (6)", chk.rows[0].n === 6, chk.rows[0].n);
       const priv = await admin.query("select array_agg(privilege_type order by privilege_type) p from information_schema.role_table_grants where grantee = 'sutecba_app' and table_name = 'person_observations'");
-      add("sutecba_app solo SELECT/INSERT en person_observations", JSON.stringify(priv.rows[0].p) === JSON.stringify(["INSERT", "SELECT"]), priv.rows[0].p);
+      const privs = (Array.isArray(priv.rows[0].p) ? priv.rows[0].p : String(priv.rows[0].p).replace(/[{}]/g, "").split(",")).map((x: string) => x.trim()).sort();
+      add("sutecba_app solo SELECT/INSERT en person_observations", JSON.stringify(privs) === JSON.stringify(["INSERT", "SELECT"]), privs);
     }
   } finally {
     await admin.end();
