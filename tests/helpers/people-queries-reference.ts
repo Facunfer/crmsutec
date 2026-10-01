@@ -1,16 +1,16 @@
 import { sql, type Kysely } from "kysely";
-import { getDb } from "../db/client.js";
-import { assertServerOnly } from "../server-only.js";
-import type { Database, PersonStatus } from "../db/schema.js";
-import type { SessionUser } from "../permissions/can.js";
-import { canAccessPerson, isUuid, orgScope, meetingVisibility } from "../scope/organizations.js";
-import { PARTICIPANT_STATUS_LABEL, type ParticipantStatus } from "../meetings/participants.js";
-import { displayOf, loadOrgDisplayNames } from "../organizations/display.js";
-import { TRAFFIC_GREEN_MAX_DAYS, TRAFFIC_YELLOW_MAX_DAYS, trafficLightOf, type TrafficLight } from "./traffic.js";
-import { visibleTagIdsCondition } from "../tags/queries.js";
-import { validInteraction, interactionDay, interactionAgeDays } from "./traffic-sql.js";
+import { getDb } from "../../lib/db/client.js";
+import type { Database, PersonStatus } from "../../lib/db/schema.js";
+import type { SessionUser } from "../../lib/permissions/can.js";
+import { canAccessPerson, isUuid, orgScope, meetingVisibility } from "../../lib/scope/organizations.js";
+import { PARTICIPANT_STATUS_LABEL, type ParticipantStatus } from "../../lib/meetings/participants.js";
+import { displayOf, loadOrgDisplayNames } from "../../lib/organizations/display.js";
+import { TRAFFIC_GREEN_MAX_DAYS, TRAFFIC_YELLOW_MAX_DAYS, trafficLightOf, type TrafficLight } from "../../lib/people/traffic.js";
+import { visibleTagIdsCondition } from "../../lib/tags/queries.js";
+import { validInteraction, interactionDay, interactionAgeDays } from "../../lib/people/traffic-sql.js";
 
-assertServerOnly("lib/people/queries.ts");
+// REFERENCIA de pruebas: copia literal de la consulta ANTERIOR a la optimización (lateral por persona), salvo el desempate por id
+// en el orden (el orden entre personas con el mismo nombre era arbitrario). No usar en producción.
 
 /**
  * Especificación tipada de filtros (sección 9 del prompt): la grilla, la
@@ -69,27 +69,6 @@ function lastInteractionLateral(actor: SessionUser) {
   )`.as("li");
 }
 
-/**
- * MISMA regla que `lastInteractionLateral` (interacción válida, no futura, dentro del alcance; día más reciente; ante
- * empate de día, 'actual' antes que 'legacy_reference'), pero UNA fila por persona calculada en una sola pasada sobre
- * `person_interactions` (DISTINCT ON) en lugar de una sonda por cada persona. Se usa cuando la consulta necesita la última
- * interacción de MUCHAS personas (filtros de semáforo/fecha, KPIs, exportación). Para las 25 filas de una página se sigue
- * usando el lateral: es más barato que recorrer todas las interacciones.
- */
-function lastInteractionDerived(actor: SessionUser) {
-  return sql`(
-    select distinct on (pi.person_id)
-           pi.person_id as person_id,
-           to_char(${interactionDay(sql`pi.occurred_at`)}, 'YYYY-MM-DD') as last_date,
-           ${interactionAgeDays(interactionDay(sql`pi.occurred_at`))} as days,
-           pi.date_basis as basis
-    from person_interactions pi
-    where ${validInteraction()}
-      and ${orgScope(actor, "pi.owner_organization_id")}
-    order by pi.person_id, ${interactionDay(sql`pi.occurred_at`)} desc, (case when pi.date_basis = 'actual' then 0 else 1 end) asc
-  )`.as("li");
-}
-
 export interface PeopleSort {
   field: "name" | "created_at";
   direction: "asc" | "desc";
@@ -104,13 +83,11 @@ function escapeLikeTerm(term: string): string {
  * personas (grilla, conteo, selección total, export, audiencias) parte de acá,
  * así el alcance organizativo no puede olvidarse en una de ellas.
  */
-function applyFilters(db: Kysely<Database>, actor: SessionUser, filter: PeopleFilterSpec, options: { withLastInteraction?: boolean } = {}) {
-  // La última interacción solo se une cuando la consulta la USA (filtros de semáforo/fecha o columnas pedidas):
-  // conteos, selección de ids y listados por página no pagan el cálculo por cada persona.
-  const needsLastInteraction = Boolean(options.withLastInteraction || filter.trafficLight || filter.lastInteractionFrom || filter.lastInteractionTo);
-  let query: any = (db as any).selectFrom("people");
-  if (needsLastInteraction) query = query.leftJoin(lastInteractionDerived(actor), (join: any) => join.on(sql<boolean>`li.person_id = people.id`));
-  query = query.where(orgScope(actor, "people.organization_id"));
+function applyFilters(db: Kysely<Database>, actor: SessionUser, filter: PeopleFilterSpec) {
+  let query = db
+    .selectFrom("people")
+    .leftJoinLateral(lastInteractionLateral(actor), (join) => join.onTrue())
+    .where(orgScope(actor, "people.organization_id"));
 
   const status = filter.status ?? "active";
   if (status !== "all") {
@@ -164,7 +141,7 @@ function applyFilters(db: Kysely<Database>, actor: SessionUser, filter: PeopleFi
 
   if (filter.search && filter.search.trim()) {
     const pattern = `%${escapeLikeTerm(filter.search.trim())}%`;
-    query = query.where((eb: any) =>
+    query = query.where((eb) =>
       eb.or([
         eb("people.first_name", "ilike", pattern),
         eb("people.last_name", "ilike", pattern),
@@ -181,7 +158,7 @@ function applyFilters(db: Kysely<Database>, actor: SessionUser, filter: PeopleFi
 export async function countPeople(actor: SessionUser, filter: PeopleFilterSpec): Promise<number> {
   const db = await getDb();
   const row = await applyFilters(db, actor, filter)
-    .select(sql<number>`count(people.id)`.as("count"))
+    .select(({ fn }) => fn.count<number>("people.id").as("count"))
     .executeTakeFirstOrThrow();
   return Number(row.count);
 }
@@ -190,7 +167,7 @@ export async function countPeople(actor: SessionUser, filter: PeopleFilterSpec):
 export async function listAllMatchingIds(actor: SessionUser, filter: PeopleFilterSpec): Promise<string[]> {
   const db = await getDb();
   const rows = await applyFilters(db, actor, filter).select("people.id").execute();
-  return (rows as Array<{ id: string }>).map((r) => r.id);
+  return rows.map((r) => r.id);
 }
 
 export interface PersonListRow {
@@ -293,7 +270,7 @@ export interface TrafficKpis {
 export async function getTrafficKpis(actor: SessionUser, filter: PeopleFilterSpec): Promise<TrafficKpis> {
   const db = await getDb();
   const { trafficLight: _t, lastInteractionFrom: _f, lastInteractionTo: _to, ...rest } = filter;
-  const rows = await applyFilters(db, actor, rest, { withLastInteraction: true })
+  const rows = await applyFilters(db, actor, rest)
     .select([
       sql<string>`case when li.last_date is null then 'gray'
                        when li.days <= ${TRAFFIC_GREEN_MAX_DAYS} then 'green'
@@ -312,20 +289,6 @@ export async function getTrafficKpis(actor: SessionUser, filter: PeopleFilterSpe
   return kpis;
 }
 
-/** Orden estable: por nombre (o fecha de alta) y, ante empate, por id. Sin el desempate, las personas con el mismo nombre
- * podían cambiar de lugar entre páginas. El índice people_name_active_idx (last_name, first_name, id) sirve este orden. */
-function orderPeople(query: any, sort: PeopleSort, table = "people") {
-  const dir = sort.direction;
-  return sort.field === "name"
-    ? query.orderBy(`${table}.last_name`, dir).orderBy(`${table}.first_name`, dir).orderBy(`${table}.id`, dir)
-    : query.orderBy(`${table}.created_at`, dir).orderBy(`${table}.id`, dir);
-}
-
-/**
- * Listado paginado en dos pasos dentro de UNA sentencia: (1) se eligen los ids de la página aplicando alcance, filtros,
- * orden y paginación; (2) recién sobre esas filas se calculan la organización superior (Área) y la última interacción.
- * Así el costo no depende de cuántas personas tiene el sistema ni de qué tan profunda sea la página.
- */
 export async function listPeoplePage(
   actor: SessionUser,
   filter: PeopleFilterSpec,
@@ -335,16 +298,21 @@ export async function listPeoplePage(
 ): Promise<{ rows: PersonListRow[]; total: number }> {
   const db = await getDb();
 
-  const pageIds = orderPeople(applyFilters(db, actor, filter).select("people.id"), sort)
+  const total = await countPeople(actor, filter);
+
+  let query = withArea(applyFilters(db, actor, filter)).select([...LIST_COLUMNS, ...extraColumns()]);
+
+  query =
+    sort.field === "name"
+      ? query.orderBy("people.last_name", sort.direction).orderBy("people.first_name", sort.direction).orderBy("people.id", sort.direction)
+      : query.orderBy("people.created_at", sort.direction).orderBy("people.id", sort.direction);
+
+  const rows = await query
     .limit(pageSize)
     .offset((page - 1) * pageSize)
-    .as("page_ids");
+    .execute();
 
-  const rowsQuery = orderPeople(
-    withArea((db as any).selectFrom(pageIds).innerJoin("people", "people.id", "page_ids.id").leftJoinLateral(lastInteractionLateral(actor), (join: any) => join.onTrue())).select([...LIST_COLUMNS, ...extraColumns()]),
-    sort
-  );
-  const [total, rows, names] = await Promise.all([countPeople(actor, filter), rowsQuery.execute(), loadOrgDisplayNames(db)]);
+  const names = await loadOrgDisplayNames(db);
   return { total, rows: (rows as any[]).map((r) => toListRow(r, names)) };
 }
 
@@ -356,13 +324,12 @@ export async function listAllMatching(
 ): Promise<PersonListRow[]> {
   const db = await getDb();
 
-  // Exportación: el orden sale del índice por nombre y la última interacción se sonda con el índice parcial de
-  // person_interactions (medido: más rápido que ordenar 179.631 filas para unir una tabla derivada). Si el filtro YA usa la
-  // última interacción (semáforo/fechas), ese join ya existe como tabla derivada y se reutiliza.
-  const filterUsesLastInteraction = Boolean(filter.trafficLight || filter.lastInteractionFrom || filter.lastInteractionTo);
-  let base: any = applyFilters(db, actor, filter);
-  if (!filterUsesLastInteraction) base = base.leftJoinLateral(lastInteractionLateral(actor), (join: any) => join.onTrue());
-  const query = orderPeople(withArea(base).select([...LIST_COLUMNS, ...extraColumns()]), sort);
+  let query = withArea(applyFilters(db, actor, filter)).select([...LIST_COLUMNS, ...extraColumns()]);
+
+  query =
+    sort.field === "name"
+      ? query.orderBy("people.last_name", sort.direction).orderBy("people.first_name", sort.direction).orderBy("people.id", sort.direction)
+      : query.orderBy("people.created_at", sort.direction).orderBy("people.id", sort.direction);
 
   const rows = await query.execute();
   const names = await loadOrgDisplayNames(db);
@@ -549,9 +516,7 @@ export async function getPersonTraffic(
 ): Promise<{ lastInteractionDate: string | null; lastInteractionBasis: "actual" | "legacy_reference" | null; daysSinceInteraction: number | null; trafficLight: TrafficLight } | null> {
   if (!isUuid(personId)) return null;
   const db = await getDb();
-  // Una sola persona: se sonda su última interacción con el lateral (no hace falta calcularla para todas).
-  const row = await (applyFilters(db, actor, { status: "all" }) as any)
-    .leftJoinLateral(lastInteractionLateral(actor), (join: any) => join.onTrue())
+  const row = await applyFilters(db, actor, { status: "all" })
     .where("people.id", "=", personId)
     .select([
       sql<string | null>`li.last_date`.as("last_date"),
