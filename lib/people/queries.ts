@@ -442,6 +442,27 @@ export async function getPersonById(actor: SessionUser, id: string): Promise<Per
   };
 }
 
+export interface PersonObservationRow {
+  id: string;
+  category: string;
+  value: string;
+  createdAt: Date;
+}
+
+/** Observaciones de una persona (categoría/valor/procedencia, p. ej. «colegio_votacion»); vacío si está fuera del alcance. */
+export async function listPersonObservations(actor: SessionUser, personId: string): Promise<PersonObservationRow[]> {
+  if (!isUuid(personId) || !(await canAccessPerson(actor, personId))) return [];
+  const db = await getDb();
+  const rows = await db
+    .selectFrom("person_observations")
+    .select(["id", "category", "value", "created_at"])
+    .where("person_id", "=", personId)
+    .orderBy("category", "asc")
+    .orderBy("created_at", "asc")
+    .execute();
+  return rows.map((r) => ({ id: r.id, category: r.category, value: r.value, createdAt: r.created_at }));
+}
+
 export interface PersonMeetingActivityRow {
   meetingId: string;
   meetingName: string;

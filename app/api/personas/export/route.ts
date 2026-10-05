@@ -16,6 +16,8 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const sp = request.nextUrl.searchParams;
   const filter: PeopleFilterSpec = {
+    // La visibilidad de la etiqueta la resuelve la consulta (alcance y sensibilidad): una no visible no filtra ni revela nada.
+    tagIds: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sp.get("tag") ?? "") ? [sp.get("tag")!] : undefined,
     search: sp.get("q") || undefined,
     areaId: sp.get("area") || undefined,
     reparticionId: sp.get("rep") || undefined,

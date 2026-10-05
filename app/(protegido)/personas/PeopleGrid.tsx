@@ -25,6 +25,8 @@ export interface PersonDisplayRow {
   daysSinceInteraction: number | null;
   trafficLight: TrafficLight;
   status: "active" | "inactive" | "merged";
+  /** Etiquetas vigentes visibles para el usuario (p. ej. «abogado»). */
+  tags: string[];
 }
 
 function TrafficCell(props: ICellRendererParams<PersonDisplayRow>) {
@@ -78,6 +80,7 @@ export function PeopleGrid({
     () => [
       { headerName: "Nombre", sortable: false, filter: false, flex: 1.2, valueGetter: (p) => (p.data ? [p.data.lastName, p.data.firstName].filter(Boolean).join(", ") : "") },
       { field: "dni", headerName: "DNI", sortable: false, filter: false, width: 120 },
+      { headerName: "Etiquetas", sortable: false, filter: false, width: 130, valueGetter: (p) => (p.data?.tags.length ? p.data.tags.join(", ") : "—") },
       { field: "areaName", headerName: "Área", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },
       { field: "reparticionName", headerName: "Repartición", sortable: false, filter: false, flex: 1, valueFormatter: (p) => p.value ?? "—" },
       { field: "phone", headerName: "Teléfono", sortable: false, filter: false, width: 140 },

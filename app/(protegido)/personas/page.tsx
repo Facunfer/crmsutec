@@ -6,6 +6,8 @@ import { isTrafficLight } from "@/lib/people/traffic";
 import { applyMasking } from "@/lib/people/masking";
 import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
 import { listAssociations } from "@/lib/associations/queries";
+import { listTagNamesForPeople, listVisibleTags } from "@/lib/tags/queries";
+import { isUuid } from "@/lib/scope/organizations";
 import { FilterBar } from "./FilterBar";
 import { PeopleGrid, type PersonDisplayRow } from "./PeopleGrid";
 import { TrafficKpiCards } from "./TrafficKpis";
@@ -22,7 +24,12 @@ export default async function PersonasPage({
   const actor = await requirePermission("people.view");
   const sp = await searchParams;
 
+  // Etiquetas visibles para el usuario (alcance y sensibilidad): alimentan el filtro; una etiqueta no visible no filtra ni revela nada.
+  const visibleTags = can(actor, "tags.view") ? await listVisibleTags(actor) : [];
+  const tagId = sp.tag && isUuid(sp.tag) && visibleTags.some((t) => t.id === sp.tag) ? sp.tag : undefined;
+
   const filter: PeopleFilterSpec = {
+    tagIds: tagId ? [tagId] : undefined,
     search: sp.q || undefined,
     areaId: sp.area || undefined,
     reparticionId: sp.rep || undefined,
@@ -46,6 +53,7 @@ export default async function PersonasPage({
     can(actor, "associations.manage_members") ? listAssociations(actor) : Promise.resolve([]),
   ]);
   const areas = await listAreaOptions(actor, orgTree);
+  const tagsByPerson = await listTagNamesForPeople(actor, rows.map((r) => r.id));
   const activeAssociations = associations.filter((a) => a.status === "active");
 
   const canSeeSensitive = can(actor, "people.view_sensitive");
@@ -65,12 +73,14 @@ export default async function PersonasPage({
       daysSinceInteraction: row.daysSinceInteraction,
       trafficLight: row.trafficLight,
       status: masked.status,
+      tags: tagsByPerson.get(row.id) ?? [],
     };
   });
 
   // Filtros de la URL (sin semáforo ni página): base de los KPIs clicables. `exportQueryString` los incluye todos.
   const baseParams = new URLSearchParams();
   if (filter.search) baseParams.set("q", filter.search);
+  if (tagId) baseParams.set("tag", tagId);
   if (filter.areaId) baseParams.set("area", filter.areaId);
   if (filter.reparticionId) baseParams.set("rep", filter.reparticionId);
   if (filter.lastInteractionFrom) baseParams.set("lastFrom", filter.lastInteractionFrom);
@@ -99,7 +109,7 @@ export default async function PersonasPage({
 
       <TrafficKpiCards kpis={kpis} active={filter.trafficLight} baseQuery={baseParams.toString()} />
 
-      <FilterBar areas={areas} orgTree={orgTree} />
+      <FilterBar areas={areas} orgTree={orgTree} tags={visibleTags.map((t) => ({ id: t.id, name: t.name }))} />
 
       <PeopleGrid
         rows={displayRows}

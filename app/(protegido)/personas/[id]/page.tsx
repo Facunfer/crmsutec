@@ -7,7 +7,9 @@ import {
   getPersonFormSubmissions,
   getPersonMeetingActivity,
   getPersonTraffic,
+  listPersonObservations,
 } from "@/lib/people/queries";
+import { listPersonTags } from "@/lib/tags/queries";
 import { TrafficBadge } from "../TrafficBadge";
 import { applyMasking } from "@/lib/people/masking";
 import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
@@ -23,6 +25,10 @@ function formatDate(date: Date): string {
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
+
+const OBSERVATION_LABEL: Record<string, string> = {
+  colegio_votacion: "Colegio donde vota",
+};
 
 const RESPONSE_LABEL: Record<string, string> = {
   pending: "pendiente",
@@ -46,11 +52,13 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const masked = applyMasking(person, canSeeSensitive);
   const { age, estimated } = computeDisplayAge(person);
 
-  const [orgTree, meetingActivity, formSubmissions, traffic] = await Promise.all([
+  const [orgTree, meetingActivity, formSubmissions, traffic, personTags, observations] = await Promise.all([
     listOrgTreeOptions(actor),
     getPersonMeetingActivity(actor, id),
     getPersonFormSubmissions(actor, id),
     getPersonTraffic(actor, id),
+    can(actor, "tags.view") ? listPersonTags(actor, id) : Promise.resolve([]),
+    listPersonObservations(actor, id),
   ]);
   const areas = await listAreaOptions(actor, orgTree);
 
@@ -89,6 +97,24 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
           <p className="mt-1 text-sm text-brand-700">
             {person.areaName ?? "Sin área"} · {person.reparticionName ?? "Sin repartición específica"}
           </p>
+          {personTags.length > 0 ? (
+            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
+              {personTags.map((t) => (
+                <span key={t.id} className="rounded-full bg-brand-100 px-2.5 py-0.5 text-xs font-medium text-brand-700">
+                  {t.name}
+                </span>
+              ))}
+            </p>
+          ) : null}
+          {observations.length > 0 ? (
+            <ul className="mt-2 space-y-0.5 text-xs text-brand-500">
+              {observations.map((o) => (
+                <li key={o.id}>
+                  {OBSERVATION_LABEL[o.category] ?? o.category.replace(/_/g, " ")}: <span className="text-brand-700">{o.value}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {traffic ? (
             <p className="mt-1 flex items-center gap-2 text-sm text-brand-700">
               <TrafficBadge light={traffic.trafficLight} />

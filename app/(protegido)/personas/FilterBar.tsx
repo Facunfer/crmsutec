@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import type { AreaOption, OrgTreeOption } from "@/lib/organizations/areas";
 
 /** Filtros reflejados en la URL (sección 9 del prompt): compartibles y recargables. Se resuelven en el servidor. */
-export function FilterBar({ areas, orgTree }: { areas: AreaOption[]; orgTree: OrgTreeOption[] }) {
+export function FilterBar({ areas, orgTree, tags = [] }: { areas: AreaOption[]; orgTree: OrgTreeOption[]; tags?: Array<{ id: string; name: string }> }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const formRef = useRef<HTMLFormElement>(null);
@@ -19,7 +19,7 @@ export function FilterBar({ areas, orgTree }: { areas: AreaOption[]; orgTree: Or
     if (!formRef.current) return;
     const data = new FormData(formRef.current);
     const params = new URLSearchParams();
-    for (const key of ["q", "area", "rep", "traffic", "lastFrom", "lastTo", "status", "ageMin", "ageMax"]) {
+    for (const key of ["q", "tag", "area", "rep", "traffic", "lastFrom", "lastTo", "status", "ageMin", "ageMax"]) {
       const value = String(data.get(key) ?? "").trim();
       if (value) params.set(key, value);
     }
@@ -41,6 +41,19 @@ export function FilterBar({ areas, orgTree }: { areas: AreaOption[]; orgTree: Or
         <label className="block text-xs text-brand-500">Buscar</label>
         <input name="q" defaultValue={searchParams.get("q") ?? ""} placeholder="nombre, apellido, DNI, email, teléfono" className={`${field} w-56`} />
       </div>
+      {tags.length > 0 ? (
+        <div>
+          <label className="block text-xs text-brand-500">Etiqueta</label>
+          <select name="tag" defaultValue={searchParams.get("tag") ?? ""} className={field}>
+            <option value="">— todas —</option>
+            {tags.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       <div>
         <label className="block text-xs text-brand-500">Área</label>
         <select

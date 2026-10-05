@@ -101,6 +101,27 @@ export async function listPersonTags(actor: SessionUser, personId: string): Prom
   }));
 }
 
+/**
+ * Nombres de las etiquetas vigentes y VISIBLES para el usuario de un conjunto de personas (los ids de una página ya
+ * acotada por alcance). Una sola consulta; devuelve un mapa personId → nombres ordenados.
+ */
+export async function listTagNamesForPeople(actor: SessionUser, personIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (personIds.length === 0) return out;
+  const db = await getDb();
+  const rows = await db
+    .selectFrom("person_tags as pt")
+    .innerJoin("tags as t", "t.id", "pt.tag_id")
+    .select(["pt.person_id as person_id", "t.name as name"])
+    .where("pt.person_id", "in", personIds)
+    .where("pt.removed_at", "is", null)
+    .where(tagVisibility(actor))
+    .orderBy("t.name", "asc")
+    .execute();
+  for (const r of rows) (out.get(r.person_id) ?? out.set(r.person_id, []).get(r.person_id)!).push(r.name);
+  return out;
+}
+
 /** Estadística: personas (dentro del alcance) por etiqueta visible. */
 export async function countPeopleByVisibleTag(actor: SessionUser): Promise<Array<{ tagId: string; name: string; count: number }>> {
   const db = await getDb();
