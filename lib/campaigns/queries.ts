@@ -104,12 +104,12 @@ export interface CampaignDetail extends CampaignListItem {
 /** null si no existe o está fuera del alcance del usuario (no se distingue). */
 export async function getCampaignById(actor: SessionUser, id: string): Promise<CampaignDetail | null> {
   if (!isUuid(id)) return null;
-  const list = await listCampaigns(actor);
-  const base = list.find((c) => c.id === id);
-  if (!base) return null;
   const db = await getDb();
-  const [meta, jornadas, levelOnly] = await Promise.all([
-    db.selectFrom("campaigns").select("owner_organization_id").where("id", "=", id).executeTakeFirstOrThrow(),
+  // La lista (que decide la visibilidad) y el resto de las lecturas son independientes: van en UNA tanda. Si la campaña no es
+  // visible para el usuario, lo demás se descarta y se devuelve null.
+  const [list, meta, jornadas, levelOnly] = await Promise.all([
+    listCampaigns(actor),
+    db.selectFrom("campaigns").select("owner_organization_id").where("id", "=", id).executeTakeFirst(),
     sql<{ id: string; name: string; schedule_precision: CampaignJornada["schedulePrecision"]; day: string | null; status: string; n: number }>`
       select m.id, m.name, m.schedule_precision, m.status,
         case when m.schedule_precision = 'unknown' then null else to_char(coalesce(m.event_date, (m.starts_at at time zone 'America/Argentina/Buenos_Aires')::date), 'YYYY-MM-DD') end as day,
@@ -125,9 +125,11 @@ export async function getCampaignById(actor: SessionUser, id: string): Promise<C
       where c.id = ${id}::uuid and mp.meeting_id is null and ${personInScope(actor, "mp.person_id")}
     `.execute(db),
   ]);
+  const base = list.find((c) => c.id === id);
+  if (!base) return null;
   return {
     ...base,
-    ownerOrganizationId: meta.owner_organization_id,
+    ownerOrganizationId: meta!.owner_organization_id,
     jornadas: jornadas.rows.map((j) => ({ id: j.id, name: j.name, schedulePrecision: j.schedule_precision, day: j.day, status: j.status, participantsCount: Number(j.n) })),
     campaignLevelOnlyCount: Number(levelOnly.rows[0]?.n ?? 0),
   };
@@ -160,8 +162,8 @@ export async function listCampaignParticipants(
 ): Promise<CampaignParticipantsPage> {
   if (!isUuid(campaignId)) return { rows: [], total: 0 };
   const db = await getDb();
-  const visible = await sql<{ ok: boolean }>`select exists (select 1 from campaigns c where c.id = ${campaignId}::uuid and ${campaignVisibility(actor)}) as ok`.execute(db);
-  if (!visible.rows[0]?.ok) return { rows: [], total: 0 };
+  // La visibilidad se evalúa en la misma tanda que las lecturas (un round trip); si no es visible, se descarta todo.
+  const visibleQuery = sql<{ ok: boolean }>`select exists (select 1 from campaigns c where c.id = ${campaignId}::uuid and ${campaignVisibility(actor)}) as ok`.execute(db);
 
   const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 200);
   const page = Math.max(options.page ?? 1, 1);
@@ -188,7 +190,8 @@ export async function listCampaignParticipants(
     group by x.person_id
   `;
 
-  const [totalRow, pageRows, names] = await Promise.all([
+  const [visible, totalRow, pageRows, names] = await Promise.all([
+    visibleQuery,
     sql<{ n: number }>`select count(*)::int as n from (${grouped}) g join people p on p.id = g.person_id where true ${searchSql}`.execute(db),
     sql<{
       person_id: string; first_name: string; last_name: string; dni: string | null; area_name: string | null; reparticion_name: string | null;
@@ -203,6 +206,7 @@ export async function listCampaignParticipants(
     `.execute(db),
     loadOrgDisplayNames(db),
   ]);
+  if (!visible.rows[0]?.ok) return { rows: [], total: 0 };
   return {
     total: Number(totalRow.rows[0]?.n ?? 0),
     rows: pageRows.rows.map((r) => ({

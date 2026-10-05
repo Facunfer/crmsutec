@@ -2,7 +2,7 @@ import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import type { SessionUser } from "../permissions/can.js";
-import { canAccessMeeting, canViewMeeting, meetingVisibility, personInScope } from "../scope/organizations.js";
+import { canAccessMeeting, canViewMeeting, isUuid, meetingVisibility, personInScope } from "../scope/organizations.js";
 import type { MeetingStatus } from "../db/schema.js";
 import { isOverdueUnclosed } from "./state-machine.js";
 
@@ -176,11 +176,10 @@ export interface MeetingDetail {
 
 /** null si no existe O está fuera del alcance del usuario (no se distingue). */
 export async function getMeetingById(actor: SessionUser, id: string): Promise<MeetingDetail | null> {
-  if (!(await canViewMeeting(actor, id))) return null;
-  const isOwner = await canAccessMeeting(actor, id);
-
+  // Visibilidad, propiedad y lectura de la fila son independientes: van en UNA tanda (un solo round trip). Si la reunión no
+  // es visible, la fila leída se descarta y nunca se devuelve.
   const db = await getDb();
-  const row = await db
+  const rowQuery = db
     .selectFrom("meetings")
     .leftJoin("users", "users.id", "meetings.organizer_user_id")
     .select([
@@ -203,10 +202,10 @@ export async function getMeetingById(actor: SessionUser, id: string): Promise<Me
       sql<string | null>`meetings.campaign_id`.as("campaign_id"),
       sql<string | null>`(select cn.name from campaigns cn where cn.id = meetings.campaign_id)`.as("campaign_name"),
     ])
-    .where("meetings.id", "=", id)
-    .executeTakeFirst();
-
-  if (!row) return null;
+    .where("meetings.id", "=", id);
+  if (!isUuid(id)) return null;
+  const [visible, isOwner, row] = await Promise.all([canViewMeeting(actor, id), canAccessMeeting(actor, id), rowQuery.executeTakeFirst()]);
+  if (!visible || !row) return null;
 
   return {
     id: row.id,

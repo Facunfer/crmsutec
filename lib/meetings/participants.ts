@@ -2,7 +2,7 @@ import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { can, type SessionUser } from "../permissions/can.js";
-import { canViewMeeting, personInScope } from "../scope/organizations.js";
+import { canViewMeeting, isUuid, personInScope } from "../scope/organizations.js";
 import { maskDni } from "../people/masking.js";
 import { displayOf, loadOrgDisplayNames } from "../organizations/display.js";
 
@@ -147,24 +147,18 @@ function merge(rows: RawRow[], canSeeSensitive: boolean, meetingDate: { date: Da
 }
 
 export async function listMeetingParticipants(actor: SessionUser, meetingId: string): Promise<MeetingParticipants> {
-  if (!(await canViewMeeting(actor, meetingId))) return { assigned: [], campaign: null };
+  if (!isUuid(meetingId)) return { assigned: [], campaign: null };
 
   const db = await getDb();
   const canSeeSensitive = can(actor, "people.view_sensitive");
-  const names = await loadOrgDisplayNames(db);
 
-  const meeting = await db
-    .selectFrom("meetings")
-    .select(["source_event_key", "schedule_precision", "event_date", "starts_at", "campaign_id"])
-    .where("id", "=", meetingId)
-    .executeTakeFirst();
-  if (!meeting) return { assigned: [], campaign: null };
-  const meetingDate = {
-    date: meeting.starts_at ?? meeting.event_date ?? null,
-    precision: meeting.schedule_precision === "unknown" ? null : (meeting.schedule_precision as "exact_datetime" | "date_only"),
-  };
-
-  const participations = await sql<RawRow>`
+  // Todas estas lecturas son independientes entre sí: se lanzan juntas (un solo round trip en vez de ~8 en serie). La
+  // visibilidad se evalúa en la misma tanda; si la reunión no es visible, lo leído se descarta y no se devuelve nada.
+  // RIESGO TÉCNICO NO BLOQUEANTE: cada detalle abre ~8 consultas en paralelo y el pool de pg es de 10 conexiones (por defecto);
+  // con mucha concurrencia las consultas harán cola (no fallan). Observar antes de tocar el pool; no se modifica en esta fase.
+  // La campaña sale de meetings.campaign_id (0036) y su clave se resuelve DENTRO de la consulta de participantes de campaña,
+  // sin lookup previo.
+  const participationsQuery = sql<RawRow>`
     select ${PEOPLE_COLUMNS},
            case mp.participation_kind
              when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
@@ -177,7 +171,7 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     where mp.meeting_id = ${meetingId}::uuid and ${personInScope(actor, "p.id")}
   `.execute(db);
 
-  const invitations = await sql<RawRow>`
+  const invitationsQuery = sql<RawRow>`
     select ${PEOPLE_COLUMNS},
            case when mi.attendance_status = 'attended' then 'attended'
                 when mi.attendance_status = 'absent' then 'absent'
@@ -190,12 +184,51 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     where mi.meeting_id = ${meetingId}::uuid and mi.withdrawn_at is null and ${personInScope(actor, "p.id")}
   `.execute(db);
 
-  const attendance = await sql<RawRow & { method: string }>`
+  const attendanceQuery = sql<RawRow & { method: string }>`
     select ${PEOPLE_COLUMNS}, 'attended' as status, ma.method, ma.checked_in_at as at, 'exact_datetime'::text as at_precision
     from meeting_attendance ma
     join people p on p.id = ma.person_id
     where ma.meeting_id = ${meetingId}::uuid and ${personInScope(actor, "p.id")}
   `.execute(db);
+
+  // Participantes GENERALES de la campaña: quedaron a nivel campaña, sin jornada probada. No se asignan a esta reunión.
+  const campaignQuery = sql<RawRow>`
+    select ${PEOPLE_COLUMNS},
+           case mp.participation_kind
+             when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
+             when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
+           coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
+           null::timestamptz as at, null::text as at_precision
+    from meeting_participations mp
+    join people p on p.id = mp.person_id
+    left join import_rows ir on ir.id = mp.import_row_id
+    where mp.meeting_id is null
+      and mp.campaign_key = (select c.campaign_key from meetings mm join campaigns c on c.id = mm.campaign_id where mm.id = ${meetingId}::uuid)
+      and ${personInScope(actor, "p.id")}
+  `.execute(db);
+
+  const meetingQuery = sql<{ schedule_precision: "exact_datetime" | "date_only" | "unknown"; event_date: Date | null; starts_at: Date | null; campaign_key: string | null; campaign_name: string | null }>`
+    select m.schedule_precision, m.event_date, m.starts_at, c.campaign_key, c.name as campaign_name
+    from meetings m left join campaigns c on c.id = m.campaign_id
+    where m.id = ${meetingId}::uuid
+  `.execute(db);
+
+  const [visible, names, meetingRes, participations, invitations, attendance, campaignRows] = await Promise.all([
+    canViewMeeting(actor, meetingId),
+    loadOrgDisplayNames(db),
+    meetingQuery,
+    participationsQuery,
+    invitationsQuery,
+    attendanceQuery,
+    campaignQuery,
+  ]);
+  const meeting = meetingRes.rows[0];
+  if (!visible || !meeting) return { assigned: [], campaign: null };
+
+  const meetingDate = {
+    date: meeting.starts_at ?? meeting.event_date ?? null,
+    precision: meeting.schedule_precision === "unknown" ? null : meeting.schedule_precision,
+  };
 
   const assigned = merge(
     [
@@ -208,31 +241,13 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     names
   );
 
-  // Participantes GENERALES de la campaña: quedaron a nivel campaña, sin jornada probada. No se asignan a esta reunión.
-  // La campaña sale de la relación explícita meetings.campaign_id (0036); ya no se deduce de la clave de la actividad.
-  const campaignRow = meeting.campaign_id
-    ? await db.selectFrom("campaigns").select(["campaign_key", "name"]).where("id", "=", meeting.campaign_id).executeTakeFirst()
-    : undefined;
-  const campaignKey = campaignRow?.campaign_key ?? null;
   let campaign: MeetingParticipants["campaign"] = null;
-  if (campaignKey) {
-    const rows = await sql<RawRow>`
-      select ${PEOPLE_COLUMNS},
-             case mp.participation_kind
-               when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
-               when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
-             coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
-             null::timestamptz as at, null::text as at_precision
-      from meeting_participations mp
-      join people p on p.id = mp.person_id
-      left join import_rows ir on ir.id = mp.import_row_id
-      where mp.meeting_id is null and mp.campaign_key = ${campaignKey} and ${personInScope(actor, "p.id")}
-    `.execute(db);
+  if (meeting.campaign_key) {
     // Sin jornada asignada no hay fecha de actividad que mostrar.
-    const campaignParticipants = merge(rows.rows, canSeeSensitive, { date: null, precision: null }, names);
+    const campaignParticipants = merge(campaignRows.rows, canSeeSensitive, { date: null, precision: null }, names);
     // Sin jornada determinada: nunca se le atribuye una de las fechas posibles. Solo cambia el texto, no el status.
     for (const p of campaignParticipants) if (p.status === "participated") p.statusLabel += PARTICIPATED_WITHOUT_MEETING_SUFFIX;
-    campaign = { key: campaignKey, name: campaignRow!.name, participants: campaignParticipants };
+    campaign = { key: meeting.campaign_key, name: meeting.campaign_name!, participants: campaignParticipants };
   }
 
   return { assigned, campaign };

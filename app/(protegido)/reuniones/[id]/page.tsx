@@ -28,16 +28,17 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
   const actor = await requirePermission("meetings.view");
   const { id } = await params;
 
-  const meeting = await getMeetingById(actor, id);
-  if (!meeting) notFound();
-
-  const [associations, organizations, associationIds, invitations, participants] = await Promise.all([
+  // Todo en una sola tanda (un round trip de red en vez de dos en serie). Cada función verifica por sí misma el acceso a la
+  // reunión y devuelve vacío/null si no corresponde: si no es visible se responde 404 y lo leído se descarta.
+  const [meeting, associations, organizations, associationIds, invitations, participants] = await Promise.all([
+    getMeetingById(actor, id),
     listAssociations(actor),
     listOrganizations(),
     getMeetingAssociationIds(actor, id),
     listInvitations(actor, id),
     listMeetingParticipants(actor, id),
   ]);
+  if (!meeting) notFound();
   // Un usuario de un área que ve la reunión solo por tener participantes suyos la mira en modo lectura.
   const isOwner = meeting.accessLevel === "owner";
 
