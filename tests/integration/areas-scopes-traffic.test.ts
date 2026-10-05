@@ -15,7 +15,7 @@ const { PERMISSIONS } = await import("../../lib/permissions/catalog.js");
 const { countPeople, getPersonTraffic, getTrafficKpis, listPeoplePage } = await import("../../lib/people/queries.js");
 const { listAreaOptions, listOrgTreeOptions, describeOrganization } = await import("../../lib/organizations/areas.js");
 const { listMeetings, getMeetingById } = await import("../../lib/meetings/queries.js");
-const { listMeetingParticipants, campaignKeyOfMeeting } = await import("../../lib/meetings/participants.js");
+const { listMeetingParticipants } = await import("../../lib/meetings/participants.js");
 const { canAccessMeeting, canViewMeeting } = await import("../../lib/scope/organizations.js");
 const { syncParticipationInteractions } = await import("../../lib/interactions/participation-sync.js");
 const { createPerson } = await import("../../lib/people/commands.js");
@@ -141,6 +141,15 @@ beforeAll(async () => {
   await meeting("soloCampana", { meeting_type: "operativo_salud", schedule_precision: "date_only", event_date: new Date("2026-03-13T00:00:00Z"), source_event_key: "ophthalmology:2026-03-13:tc", starts_at: null, ends_at: null });
   await db.insertInto("meeting_participations").values({ meeting_id: null, campaign_key: "ophthalmology:tc", person_id: P.cTeatro2!, participation_kind: "registration" } as never).execute();
   await db.insertInto("meeting_participations").values({ meeting_id: null, campaign_key: "ophthalmology:tc", person_id: P.pg1!, participation_kind: "registration" } as never).execute();
+  // Campañas reales (0036): la relación jornada → campaña es explícita (meetings.campaign_id).
+  for (const [meetingKey, campaignKey, name] of [["canale", "ophthalmology:canale", "Campaña oftalmológica — Canale"], ["soloCampana", "ophthalmology:tc", "Campaña oftalmológica — Teatro Colón"]] as const) {
+    const c = await db
+      .insertInto("campaigns")
+      .values({ campaign_key: campaignKey, name, campaign_type: "ophthalmology", owner_organization_id: sutecbaOwner, origin: "import", historical_condition: "imported_occurred", created_by: masterId } as never)
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await db.updateTable("meetings").set({ campaign_id: c.id } as never).where("id", "=", M[meetingKey]!).execute();
+  }
   await part("cursoRCP", "cTeatro1", "registration");
   await part("cursoRCP", "cTeatro2", "attended", { evidence: "planilla firmada" });
   await part("cursoRCP", "hDgtal", "attended", { evidence: "planilla firmada" });
@@ -295,8 +304,7 @@ describe("Reuniones de SUTECBA vistas por un usuario de área", () => {
   });
 
   it("las participaciones de campaña sin jornada NO se asignan a la reunión: van aparte, filtradas por alcance", async () => {
-    expect(campaignKeyOfMeeting("ophthalmology:2026-03-11:canale")).toBe("ophthalmology:canale");
-    expect(campaignKeyOfMeeting("training:52010")).toBeNull();
+    expect((await listMeetingParticipants(master, M.cursoRCP!)).campaign).toBeNull();
     const master_ = await listMeetingParticipants(master, M.canale!);
     expect(master_.assigned.map((p) => p.firstName)).toEqual(["cRaiz"]);
     expect(master_.campaign?.participants.map((p) => p.firstName).sort()).toEqual(["cTeatro1", "hDgtal"]);

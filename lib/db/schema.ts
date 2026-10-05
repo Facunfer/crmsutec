@@ -268,6 +268,8 @@ export interface MeetingsTable {
   origin: Generated<"manual" | "import">;
   source_event_key: string | null;
   import_batch_id: string | null;
+  /** 0036: campaña a la que pertenece esta jornada (nullable; las reuniones comunes y las capacitaciones no tienen). */
+  campaign_id: string | null;
   schedule_precision: Generated<MeetingSchedulePrecision>;
   event_date: Date | null;
   source_time_note: string | null;
@@ -284,6 +286,31 @@ export interface MeetingsTable {
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
   created_by: string | null;
+}
+
+export type CampaignType = "vaccination" | "ophthalmology" | "other";
+export type CampaignStatus = "draft" | "scheduled" | "active" | "finalized" | "cancelled";
+/** Condición histórica de una campaña IMPORTADA (separada del estado operativo). */
+export type CampaignHistoricalCondition = "imported_occurred" | "imported_undated";
+
+export interface CampaignsTable {
+  id: Generated<string>;
+  /** Clave canónica; coincide con meeting_participations.campaign_key (participación a nivel campaña). */
+  campaign_key: string;
+  name: string;
+  campaign_type: CampaignType;
+  /** Propiedad administrativa (SUTECBA raíz para lo histórico). No es el empleador de los participantes. */
+  owner_organization_id: string;
+  /** Estado operativo gestionado en el sistema; NULL si nadie lo gestionó (campañas importadas). */
+  status: CampaignStatus | null;
+  /** Solo campañas importadas: ocurrió con fecha documentada / ocurrió sin fecha documentada. */
+  historical_condition: CampaignHistoricalCondition | null;
+  origin: Generated<"manual" | "import">;
+  start_date: Date | null;
+  end_date: Date | null;
+  created_by: string | null;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
 }
 
 export interface MeetingAssociationsTable {
@@ -722,6 +749,7 @@ export interface Database {
   tags: TagsTable;
   person_tags: PersonTagsTable;
   person_observations: PersonObservationsTable;
+  campaigns: CampaignsTable;
   interaction_types: InteractionTypesTable;
   interaction_channels: InteractionChannelsTable;
   person_interactions: PersonInteractionsTable;

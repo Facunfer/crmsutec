@@ -230,6 +230,22 @@ export async function runTandasImport(db: Db, files: ExtractedFile[], options: T
       counters.meetingsCreated += 1;
     }
   });
+  // Campañas (0036): toda actividad de tipo campaña existe como fila de `campaigns` ANTES de recibir participaciones a nivel
+  // campaña. Se crean sin estado operativo ni fechas (no se inventan); si ya existe (p. ej. por el backfill 0036) no se toca.
+  await db.transaction().execute(async (trx) => {
+    await lock(trx);
+    for (const a of planA.activities.filter((x) => x.target === "campaign")) {
+      const campaignType = a.key.startsWith("vaccination:") ? "vaccination" : a.key.startsWith("ophthalmology:") ? "ophthalmology" : "other";
+      await trx
+        .insertInto("campaigns")
+        .values({
+          campaign_key: a.key, name: a.name, campaign_type: campaignType, owner_organization_id: options.ownerOrganizationId,
+          origin: "import", historical_condition: "imported_undated", created_by: options.createdBy,
+        } as never)
+        .onConflict((oc) => oc.column("campaign_key").doNothing())
+        .execute();
+    }
+  });
   for (const m of await db.selectFrom("meetings").select(["id", "source_event_key"]).where("source_event_key", "is not", null).execute()) meetingIdByKey.set(m.source_event_key!, m.id);
   stop("3a");
 

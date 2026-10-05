@@ -51,6 +51,11 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
+          {meeting.campaign ? (
+            <Link href={`/reuniones/campanas/${meeting.campaign.id}`} className="text-xs text-brand-500 hover:underline">
+              ← Jornada de la campaña «{meeting.campaign.name}»
+            </Link>
+          ) : null}
           <h1 className="text-xl font-semibold text-brand-900">{meeting.name}</h1>
           <p className="text-sm text-brand-400">
             {formatMeetingWhen(meeting, { withEnd: true })} · organiza {meeting.organizerName ?? "—"}

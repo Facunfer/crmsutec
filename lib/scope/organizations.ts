@@ -148,17 +148,37 @@ export function meetingVisibility(user: SessionUser, meetingIdColumn = "meetings
       join people pa on pa.id = ma.person_id
       where ma.meeting_id = ${sql.ref(meetingIdColumn)} and pa.organization_id in (${acc})
     )
-    -- Participantes GENERALES de la campaña de la actividad (inscriptos sin jornada probada): la reunión se ve para
-    -- poder mostrarlos en «Sin jornada asignada». Siguen sin asignarse a ninguna jornada.
+    -- Participantes GENERALES de la campaña de la actividad (participación a nivel campaña, sin jornada probada): la
+    -- reunión se ve para poder mostrarlos en «Sin jornada asignada». La campaña sale de meetings.campaign_id (0036).
+    or exists (
+      select 1 from meetings mm
+      join campaigns cc on cc.id = mm.campaign_id
+      join meeting_participations mc on mc.meeting_id is null and mc.campaign_key = cc.campaign_key
+      join people pc on pc.id = mc.person_id
+      where mm.id = ${sql.ref(meetingIdColumn)} and pc.organization_id in (${acc})
+    )
+  )`;
+}
+
+/**
+ * VISIBILIDAD de una campaña (solo lectura): la ve el usuario si su propietaria administrativa está en el alcance, O si hay
+ * participantes suyos a nivel campaña, O si alguna de sus jornadas es visible (meetingVisibility). Misma lógica que las
+ * reuniones: la propiedad administrativa (SUTECBA para lo histórico) no es el empleador de los participantes. Las personas
+ * sin organización nunca están en el alcance de un usuario de área. MASTER_GLOBAL ve todas.
+ */
+export function campaignVisibility(user: SessionUser, campaignIdColumn = "c.id", ownerColumn = "c.owner_organization_id", keyColumn = "c.campaign_key"): RawBuilder<boolean> {
+  if (hasGlobalScope(user)) return sql<boolean>`true`;
+  const acc = sql`select organization_id from user_accessible_organizations(${user.id}::uuid)`;
+  return sql<boolean>`(
+    ${sql.ref(ownerColumn)} in (${acc})
     or exists (
       select 1 from meeting_participations mc
       join people pc on pc.id = mc.person_id
-      where mc.meeting_id is null
-        and mc.campaign_key = 'ophthalmology:' || (
-          select (regexp_match(mm.source_event_key, '^ophthalmology:(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|sin-fecha):(.+)$'))[1]
-          from meetings mm where mm.id = ${sql.ref(meetingIdColumn)}
-        )
-        and pc.organization_id in (${acc})
+      where mc.meeting_id is null and mc.campaign_key = ${sql.ref(keyColumn)} and pc.organization_id in (${acc})
+    )
+    or exists (
+      select 1 from meetings mm
+      where mm.campaign_id = ${sql.ref(campaignIdColumn)} and ${meetingVisibility(user, "mm.id", "mm.owner_organization_id")}
     )
   )`;
 }

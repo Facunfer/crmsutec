@@ -26,10 +26,14 @@ export interface MeetingListItem {
   /** Asignados a ESTA jornada puntual (meeting_id = esta reunión). Nunca incluye a quienes quedaron solo a nivel de
    * campaña sin jornada determinada: ver `campaignParticipantsCount`. */
   participantsCount: number;
-  /** Participantes de la MISMA campaña (Oftalmología u otra) sin jornada asignada a ninguna reunión — para que la
-   * lista nunca dé la impresión de que la actividad no tuvo a nadie solo porque no se sabe a qué día corresponden.
-   * `null` cuando la actividad no pertenece a ninguna campaña (no es de tipo campaña histórica). */
+  /** Personas distintas de la MISMA campaña con participación a nivel campaña (sin jornada asignada) — para que la lista
+   * nunca dé la impresión de que la actividad no tuvo a nadie solo porque no se sabe a qué día corresponden.
+   * `null` cuando la reunión no pertenece a ninguna campaña (meetings.campaign_id). */
   campaignParticipantsCount: number | null;
+  /** Campaña a la que pertenece la jornada (0036); null en reuniones comunes y capacitaciones. */
+  campaignId: string | null;
+  campaignName: string | null;
+  meetingType: string;
 }
 
 export interface MeetingListFilter {
@@ -74,20 +78,23 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
       "meetings.event_date",
       "meetings.location_name",
       "meetings.status",
+      "meetings.campaign_id",
+      "meetings.meeting_type",
+      sql<string | null>`(select cn.name from campaigns cn where cn.id = meetings.campaign_id)`.as("campaign_name"),
       "users.full_name as organizer_name",
       sql<number>`(
         select count(distinct mp.person_id)::int from meeting_participations mp
         where mp.meeting_id = meetings.id and ${personInScope(actor, "mp.person_id")}
       )`.as("participants_count"),
-      // Misma campaña (regex idéntica a campaignKeyOfMeeting en lib/meetings/participants.ts), sin jornada asignada
-      // a ninguna reunión: null si esta actividad no pertenece a ninguna campaña histórica.
+      // Personas de la campaña de esta jornada (meetings.campaign_id) con participación a nivel campaña, dentro del alcance:
+      // null si la reunión no pertenece a ninguna campaña.
       sql<number | null>`(
         case
-          when (regexp_match(meetings.source_event_key, '^ophthalmology:(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|sin-fecha):(.+)$')) is null then null
+          when meetings.campaign_id is null then null
           else (
             select count(distinct mp2.person_id)::int from meeting_participations mp2
-            where mp2.meeting_id is null
-              and mp2.campaign_key = 'ophthalmology:' || (regexp_match(meetings.source_event_key, '^ophthalmology:(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|sin-fecha):(.+)$'))[1]
+            join campaigns cc on cc.id = meetings.campaign_id
+            where mp2.meeting_id is null and mp2.campaign_key = cc.campaign_key
               and ${personInScope(actor, "mp2.person_id")}
           )
         end
@@ -107,6 +114,8 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
       "meetings.event_date",
       "meetings.location_name",
       "meetings.status",
+      "meetings.campaign_id",
+      "meetings.meeting_type",
       "users.full_name",
     ])
     // Las actividades importadas sin hora (date_only) ordenan por su día; las sin fecha van al final.
@@ -130,6 +139,9 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
       confirmedCount: Number(r.confirmed_count),
       participantsCount: Number(r.participants_count),
       campaignParticipantsCount: r.campaign_participants_count === null ? null : Number(r.campaign_participants_count),
+      campaignId: r.campaign_id,
+      campaignName: r.campaign_name,
+      meetingType: r.meeting_type,
     };
   });
 
@@ -157,6 +169,9 @@ export interface MeetingDetail {
   accessLevel: "owner" | "participants";
   /** Clave de la actividad importada (p. ej. «ophthalmology:2026-03-10:canale»); null en reuniones creadas a mano. */
   sourceEventKey: string | null;
+  /** Campaña a la que pertenece esta jornada (0036), con su nombre; null si no pertenece a ninguna. */
+  campaign: { id: string; name: string } | null;
+  meetingType: string;
 }
 
 /** null si no existe O está fuera del alcance del usuario (no se distingue). */
@@ -184,6 +199,9 @@ export async function getMeetingById(actor: SessionUser, id: string): Promise<Me
       "users.full_name as organizer_name",
       "meetings.created_at",
       "meetings.source_event_key",
+      "meetings.meeting_type",
+      sql<string | null>`meetings.campaign_id`.as("campaign_id"),
+      sql<string | null>`(select cn.name from campaigns cn where cn.id = meetings.campaign_id)`.as("campaign_name"),
     ])
     .where("meetings.id", "=", id)
     .executeTakeFirst();
@@ -208,6 +226,8 @@ export async function getMeetingById(actor: SessionUser, id: string): Promise<Me
     createdAt: row.created_at,
     accessLevel: isOwner ? "owner" : "participants",
     sourceEventKey: row.source_event_key,
+    campaign: row.campaign_id && row.campaign_name ? { id: row.campaign_id, name: row.campaign_name } : null,
+    meetingType: row.meeting_type,
   };
 }
 

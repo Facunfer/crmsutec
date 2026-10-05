@@ -497,7 +497,7 @@ export async function getPersonMeetingActivity(actor: SessionUser, personId: str
         when 'registration' then 40 when 'confirmed' then 35 when 'declined' then 30 when 'invited' then 20 else 10 end desc
     )
     select coalesce(m.id::text,'campaign:'||e.campaign_key) key,
-      coalesce(m.name, 'Campaña: '||e.campaign_key) name, e.kind,
+      coalesce(m.name, (select cn.name from campaigns cn where cn.campaign_key = e.campaign_key), 'Campaña: '||e.campaign_key) name, e.kind,
       case when m.schedule_precision='exact_datetime' then m.starts_at when m.schedule_precision='date_only'
         then m.event_date::timestamp at time zone 'America/Argentina/Buenos_Aires' end at,
       case when m.schedule_precision='unknown' then null else m.schedule_precision end as "precision",

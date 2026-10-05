@@ -67,7 +67,7 @@ export interface MeetingParticipants {
   /** Vinculados a ESTA jornada. */
   assigned: MeetingParticipant[];
   /** Participaciones de la campaña a la que pertenece la actividad SIN jornada probada (no se asignan a ninguna). */
-  campaign: { key: string; participants: MeetingParticipant[] } | null;
+  campaign: { key: string; name: string; participants: MeetingParticipant[] } | null;
 }
 
 interface RawRow {
@@ -85,7 +85,7 @@ interface RawRow {
   at_precision: "exact_datetime" | "date_only" | null;
 }
 
-const PEOPLE_COLUMNS = sql`
+export const PEOPLE_COLUMNS = sql`
   p.id as person_id, p.first_name, p.last_name, p.dni,
   (select a.name from organizations a where a.id = public.organization_area_id(p.organization_id)) as area_name,
   (select case when o.parent_id is null then null else o.name end from organizations o where o.id = p.organization_id) as reparticion_name,
@@ -100,13 +100,6 @@ const ATTENDANCE_METHOD: Record<string, string> = {
   phone: "Check-in (teléfono)",
   manual: "Registro manual",
 };
-
-/** «ophthalmology:2026-03-10:canale» → campaña «ophthalmology:canale». Las capacitaciones («training:…») no tienen campaña. */
-export function campaignKeyOfMeeting(sourceEventKey: string | null): string | null {
-  if (!sourceEventKey) return null;
-  const match = /^ophthalmology:(?:\d{4}-\d{2}-\d{2}|sin-fecha):(.+)$/.exec(sourceEventKey);
-  return match ? `ophthalmology:${match[1]}` : null;
-}
 
 function merge(rows: RawRow[], canSeeSensitive: boolean, meetingDate: { date: Date | null; precision: MeetingParticipant["datePrecision"] }, names: ReadonlyMap<string, string>): MeetingParticipant[] {
   const byPerson = new Map<string, MeetingParticipant & { _strength: number }>();
@@ -162,7 +155,7 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
 
   const meeting = await db
     .selectFrom("meetings")
-    .select(["source_event_key", "schedule_precision", "event_date", "starts_at"])
+    .select(["source_event_key", "schedule_precision", "event_date", "starts_at", "campaign_id"])
     .where("id", "=", meetingId)
     .executeTakeFirst();
   if (!meeting) return { assigned: [], campaign: null };
@@ -216,7 +209,11 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
   );
 
   // Participantes GENERALES de la campaña: quedaron a nivel campaña, sin jornada probada. No se asignan a esta reunión.
-  const campaignKey = campaignKeyOfMeeting(meeting.source_event_key);
+  // La campaña sale de la relación explícita meetings.campaign_id (0036); ya no se deduce de la clave de la actividad.
+  const campaignRow = meeting.campaign_id
+    ? await db.selectFrom("campaigns").select(["campaign_key", "name"]).where("id", "=", meeting.campaign_id).executeTakeFirst()
+    : undefined;
+  const campaignKey = campaignRow?.campaign_key ?? null;
   let campaign: MeetingParticipants["campaign"] = null;
   if (campaignKey) {
     const rows = await sql<RawRow>`
@@ -235,7 +232,7 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     const campaignParticipants = merge(rows.rows, canSeeSensitive, { date: null, precision: null }, names);
     // Sin jornada determinada: nunca se le atribuye una de las fechas posibles. Solo cambia el texto, no el status.
     for (const p of campaignParticipants) if (p.status === "participated") p.statusLabel += PARTICIPATED_WITHOUT_MEETING_SUFFIX;
-    campaign = { key: campaignKey, participants: campaignParticipants };
+    campaign = { key: campaignKey, name: campaignRow!.name, participants: campaignParticipants };
   }
 
   return { assigned, campaign };

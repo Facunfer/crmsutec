@@ -75,7 +75,7 @@ export function ParticipantsSection({ participants }: { participants: MeetingPar
 
       {participants.campaign ? (
         <div className="mt-6">
-          <h3 className="mb-1 text-sm font-semibold text-brand-900">Sin jornada asignada (participantes generales de la campaña)</h3>
+          <h3 className="mb-1 text-sm font-semibold text-brand-900">Sin jornada asignada (participantes generales de «{participants.campaign.name}»)</h3>
           <p className="mb-3 text-xs text-brand-400">
             La fuente no permite probar a qué jornada corresponden; no se les asignó ninguna ni una fecha. Para la carga histórica inicial esto se considera
             participación igual («Participó — jornada no determinada»); para inscripciones nuevas del CRM esto no implica asistencia.
