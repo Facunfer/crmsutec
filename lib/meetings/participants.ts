@@ -5,6 +5,8 @@ import { can, type SessionUser } from "../permissions/can.js";
 import { canViewMeeting, isUuid, personInScope } from "../scope/organizations.js";
 import { maskDni } from "../people/masking.js";
 import { displayOf, loadOrgDisplayNames } from "../organizations/display.js";
+import { ATTENDANCE_ACTIVE } from "../activities/metrics.js";
+import { ATTENDANCE_METHOD_COPY, BASIS_COPY, type InvitationResponse, type ParticipationBasis, type PersonActivityFacts } from "../activities/labels.js";
 
 assertServerOnly("lib/meetings/participants.ts");
 
@@ -39,6 +41,10 @@ export const PARTICIPANT_STATUS_LABEL: Record<ParticipantStatus, string> = {
   pending: "Pendiente / sin dato",
 };
 
+/**
+ * LEGACY DE PRESENTACIÓN: `status`/`statusLabel` colapsan los hechos en el «más fuerte». Las pantallas NO los muestran desde B1
+ * (usan `facts`); se conservan por compatibilidad con consumidores existentes (p. ej. la actividad de la persona, que B5 reemplaza).
+ */
 /** Sufijo para «participated» SOLO en la sección de campaña (sin jornada determinada): nunca se asigna una fecha arbitraria. */
 export const PARTICIPATED_WITHOUT_MEETING_SUFFIX = " — jornada no determinada";
 
@@ -61,6 +67,12 @@ export interface MeetingParticipant {
   date: Date | null;
   /** Precisión de esa fecha: solo día (date_only) o con hora. */
   datePrecision: "exact_datetime" | "date_only" | null;
+  /** Hechos independientes de la persona en esta actividad (lo que muestra la UI). */
+  facts: PersonActivityFacts;
+  /** Procedencia en lenguaje humano, una frase por hecho («Participación histórica inicial», «Inscripción según listado importado»…). */
+  provenance: string[];
+  /** Referencias técnicas de la fuente (códigos de listado importado): solo como detalle, nunca como texto principal. */
+  technicalRefs: string[];
 }
 
 export interface MeetingParticipants {
@@ -83,6 +95,14 @@ interface RawRow {
   origin: string;
   at: Date | null;
   at_precision: "exact_datetime" | "date_only" | null;
+  src: "participation" | "invitation" | "attendance";
+  /** participation_kind crudo (solo src = participation). */
+  raw_kind: string | null;
+  basis: ParticipationBasis | null;
+  response: InvitationResponse | null;
+  imported: boolean | null;
+  tech_ref: string | null;
+  method: string | null;
 }
 
 export const PEOPLE_COLUMNS = sql`
@@ -101,12 +121,38 @@ const ATTENDANCE_METHOD: Record<string, string> = {
   manual: "Registro manual",
 };
 
+const emptyFacts = (): PersonActivityFacts => ({ invited: false, response: null, registered: false, participated: false, participationBases: [], attended: false });
+
+/** Acumula en `facts`/`provenance` lo que aporta UNA fuente. Cada hecho es independiente: ninguno infiere a otro. */
+function accumulateFact(m: Pick<MeetingParticipant, "facts" | "provenance" | "technicalRefs">, r: RawRow): void {
+  const add = (text: string) => { if (!m.provenance.includes(text)) m.provenance.push(text); };
+  if (r.src === "invitation") {
+    m.facts.invited = true;
+    m.facts.response = r.response;
+    add("Invitación");
+  } else if (r.src === "attendance") {
+    m.facts.attended = true;
+    m.facts.participated = true; // regla derivada: Asistió ⊆ Participó (sin fila física en meeting_participations)
+    add(ATTENDANCE_METHOD_COPY[r.method ?? ""] ?? "Asistencia comprobada");
+  } else if (r.raw_kind === "registration") {
+    m.facts.registered = true;
+    add(r.imported ? "Inscripción según listado importado" : "Inscripción registrada en el sistema");
+  } else if (r.raw_kind === "participated" || r.raw_kind === "attended") {
+    m.facts.participated = true;
+    const basis = r.basis ?? "standard";
+    if (!m.facts.participationBases.includes(basis)) m.facts.participationBases.push(basis);
+    add(r.raw_kind === "attended" ? "Participación con evidencia registrada" : BASIS_COPY[basis]);
+  }
+  if (r.tech_ref && !m.technicalRefs.includes(r.tech_ref)) m.technicalRefs.push(r.tech_ref);
+}
+
 function merge(rows: RawRow[], canSeeSensitive: boolean, meetingDate: { date: Date | null; precision: MeetingParticipant["datePrecision"] }, names: ReadonlyMap<string, string>): MeetingParticipant[] {
   const byPerson = new Map<string, MeetingParticipant & { _strength: number }>();
   for (const r of rows) {
     const strength = STRENGTH[r.status];
     const current = byPerson.get(r.person_id);
     const origin = r.origin;
+    if (current) accumulateFact(current, r);
     if (!current) {
       byPerson.set(r.person_id, {
         personId: r.person_id,
@@ -120,8 +166,12 @@ function merge(rows: RawRow[], canSeeSensitive: boolean, meetingDate: { date: Da
         origins: [origin],
         date: r.at,
         datePrecision: r.at_precision,
+        facts: emptyFacts(),
+        provenance: [],
+        technicalRefs: [],
         _strength: strength,
       });
+      accumulateFact(byPerson.get(r.person_id)!, r);
       continue;
     }
     if (!current.origins.includes(origin)) current.origins.push(origin);
@@ -164,7 +214,9 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
              when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
              when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
            coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
-           null::timestamptz as at, null::text as at_precision
+           null::timestamptz as at, null::text as at_precision,
+           'participation' as src, mp.participation_kind as raw_kind, mp.participation_basis as basis, null::text as response,
+           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method
     from meeting_participations mp
     join people p on p.id = mp.person_id
     left join import_rows ir on ir.id = mp.import_row_id
@@ -173,22 +225,24 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
 
   const invitationsQuery = sql<RawRow>`
     select ${PEOPLE_COLUMNS},
-           case when mi.attendance_status = 'attended' then 'attended'
-                when mi.attendance_status = 'absent' then 'absent'
-                when mi.response_status = 'confirmed' then 'confirmed'
+           case when mi.response_status = 'confirmed' then 'confirmed'
                 when mi.response_status = 'declined' then 'declined'
                 else 'invited' end as status,
-           'Invitación' as origin, null::timestamptz as at, null::text as at_precision
+           'Invitación' as origin, null::timestamptz as at, null::text as at_precision,
+           'invitation' as src, null::text as raw_kind, null::text as basis, mi.response_status as response,
+           null::boolean as imported, null::text as tech_ref, null::text as method
     from meeting_invitations mi
     join people p on p.id = mi.person_id
     where mi.meeting_id = ${meetingId}::uuid and mi.withdrawn_at is null and ${personInScope(actor, "p.id")}
   `.execute(db);
 
   const attendanceQuery = sql<RawRow & { method: string }>`
-    select ${PEOPLE_COLUMNS}, 'attended' as status, ma.method, ma.checked_in_at as at, 'exact_datetime'::text as at_precision
+    select ${PEOPLE_COLUMNS}, 'attended' as status, ma.method, ma.checked_in_at as at, 'exact_datetime'::text as at_precision,
+           'attendance' as src, null::text as raw_kind, null::text as basis, null::text as response,
+           null::boolean as imported, null::text as tech_ref
     from meeting_attendance ma
     join people p on p.id = ma.person_id
-    where ma.meeting_id = ${meetingId}::uuid and ${personInScope(actor, "p.id")}
+    where ma.meeting_id = ${meetingId}::uuid and ${ATTENDANCE_ACTIVE} and ${personInScope(actor, "p.id")}
   `.execute(db);
 
   // Participantes GENERALES de la campaña: quedaron a nivel campaña, sin jornada probada. No se asignan a esta reunión.
@@ -198,7 +252,9 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
              when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
              when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
            coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
-           null::timestamptz as at, null::text as at_precision
+           null::timestamptz as at, null::text as at_precision,
+           'participation' as src, mp.participation_kind as raw_kind, mp.participation_basis as basis, null::text as response,
+           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method
     from meeting_participations mp
     join people p on p.id = mp.person_id
     left join import_rows ir on ir.id = mp.import_row_id

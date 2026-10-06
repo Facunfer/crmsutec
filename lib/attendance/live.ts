@@ -1,6 +1,8 @@
 import { getDb } from "../db/client.js";
 import type { SessionUser } from "../permissions/can.js";
-import { canAccessMeeting, orgScope } from "../scope/organizations.js";
+import { canAccessMeeting, isUuid, orgScope } from "../scope/organizations.js";
+import { sql } from "kysely";
+import { ATTENDANCE_ACTIVE } from "../activities/metrics.js";
 import { assertServerOnly } from "../server-only.js";
 
 assertServerOnly("lib/attendance/live.ts");
@@ -9,10 +11,11 @@ export interface LivePanelData {
   invited: number;
   confirmed: number;
   present: number;
-  absentSoFar: number;
+  /** Invitados vigentes que todavía no tienen asistencia registrada (no es una ausencia comprobada). */
+  invitedNotArrived: number;
   pendingResponse: number;
   declined: number;
-  attendanceRate: number | null; // present / invited
+  attendanceRate: number | null; // invitados que asistieron / invitados
   arrived: Array<{ personId: string; firstName: string; lastName: string; checkedInAt: Date; method: string }>;
   confirmedNotArrived: Array<{ personId: string; firstName: string; lastName: string }>;
   pending: Array<{ personId: string; firstName: string; lastName: string }>;
@@ -22,11 +25,11 @@ export interface LivePanelData {
 /** Todo lo que muestra el panel en vivo se deriva de invitaciones/check-ins, nunca se guarda aparte (sección 6.2). */
 /** null si la reunión no existe o está fuera del alcance del usuario. */
 export async function getLivePanelData(actor: SessionUser, meetingId: string): Promise<LivePanelData | null> {
-  if (!(await canAccessMeeting(actor, meetingId))) return null;
-
+  if (!isUuid(meetingId)) return null;
   const db = await getDb();
 
-  const invitations = await db
+  // Acceso, invitaciones y asistencia son independientes: una sola tanda (un round trip); sin acceso se descarta todo.
+  const invitationsQuery = db
     .selectFrom("meeting_invitations")
     .innerJoin("people", "people.id", "meeting_invitations.person_id")
     .select([
@@ -34,18 +37,19 @@ export async function getLivePanelData(actor: SessionUser, meetingId: string): P
       "people.first_name",
       "people.last_name",
       "meeting_invitations.response_status",
-      "meeting_invitations.attendance_status",
     ])
     .where("meeting_invitations.meeting_id", "=", meetingId)
-    .where("meeting_invitations.withdrawn_at", "is", null)
-    .execute();
+    .where("meeting_invitations.withdrawn_at", "is", null);
 
-  const attendanceRows = await db
+  const attendanceQuery = db
     .selectFrom("meeting_attendance")
     .select(["person_id", "checked_in_at", "method"])
     .where("meeting_id", "=", meetingId)
-    .orderBy("checked_in_at", "asc")
-    .execute();
+    .where(sql<boolean>`${ATTENDANCE_ACTIVE}`)
+    .orderBy("checked_in_at", "asc");
+
+  const [allowed, invitations, attendanceRows] = await Promise.all([canAccessMeeting(actor, meetingId), invitationsQuery.execute(), attendanceQuery.execute()]);
+  if (!allowed) return null;
   const attendanceByPerson = new Map(attendanceRows.map((r) => [r.person_id, r]));
 
   const invited = invitations.length;
@@ -53,7 +57,8 @@ export async function getLivePanelData(actor: SessionUser, meetingId: string): P
   const present = attendanceRows.length;
   const pendingResponse = invitations.filter((i) => i.response_status === "pending").length;
   const declined = invitations.filter((i) => i.response_status === "declined").length;
-  const absentSoFar = invitations.filter((i) => i.attendance_status === "absent").length;
+  const invitedNotArrived = invitations.filter((i) => !attendanceByPerson.has(i.person_id)).length;
+  const invitedArrived = invited - invitedNotArrived;
 
   const arrived = attendanceRows.map((r) => {
     const inv = invitations.find((i) => i.person_id === r.person_id);
@@ -82,10 +87,10 @@ export async function getLivePanelData(actor: SessionUser, meetingId: string): P
     invited,
     confirmed,
     present,
-    absentSoFar,
+    invitedNotArrived,
     pendingResponse,
     declined,
-    attendanceRate: invited > 0 ? Math.round((present / invited) * 100) : null,
+    attendanceRate: invited > 0 ? Math.round((invitedArrived / invited) * 100) : null,
     arrived,
     confirmedNotArrived,
     pending,
@@ -109,38 +114,43 @@ export async function quickSearchForAccreditation(
 ): Promise<QuickSearchResult[]> {
   const term = search.trim();
   if (term.length < 2) return [];
-  if (!(await canAccessMeeting(actor, meetingId))) return [];
+  if (!isUuid(meetingId)) return [];
 
   const db = await getDb();
-  const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+  const pattern = `%${term.replace(/[\%_]/g, (ch) => `\${ch}`)}%`;
 
-  const people = await db
-    .selectFrom("people")
-    .select(["id", "first_name", "last_name"])
-    .where("status", "=", "active")
-    .where(orgScope(actor, "people.organization_id"))
-    .where((eb) => eb.or([eb("first_name", "ilike", pattern), eb("last_name", "ilike", pattern), eb("dni", "ilike", pattern)]))
-    .limit(15)
-    .execute();
-
-  if (people.length === 0) return [];
+  // Acceso y búsqueda de personas son independientes: una sola tanda; sin acceso se descarta todo.
+  const [allowed, people] = await Promise.all([
+    canAccessMeeting(actor, meetingId),
+    db
+      .selectFrom("people")
+      .select(["id", "first_name", "last_name"])
+      .where("status", "=", "active")
+      .where(orgScope(actor, "people.organization_id"))
+      .where((eb) => eb.or([eb("first_name", "ilike", pattern), eb("last_name", "ilike", pattern), eb("dni", "ilike", pattern)]))
+      .limit(15)
+      .execute(),
+  ]);
+  if (!allowed || people.length === 0) return [];
   const ids = people.map((p) => p.id);
 
-  const invitations = await db
-    .selectFrom("meeting_invitations")
-    .select("person_id")
-    .where("meeting_id", "=", meetingId)
-    .where("person_id", "in", ids)
-    .where("withdrawn_at", "is", null)
-    .execute();
+  const [invitations, attendance] = await Promise.all([
+    db
+      .selectFrom("meeting_invitations")
+      .select("person_id")
+      .where("meeting_id", "=", meetingId)
+      .where("person_id", "in", ids)
+      .where("withdrawn_at", "is", null)
+      .execute(),
+    db
+      .selectFrom("meeting_attendance")
+      .select("person_id")
+      .where("meeting_id", "=", meetingId)
+      .where("person_id", "in", ids)
+      .where(sql<boolean>`${ATTENDANCE_ACTIVE}`)
+      .execute(),
+  ]);
   const invitedSet = new Set(invitations.map((i) => i.person_id));
-
-  const attendance = await db
-    .selectFrom("meeting_attendance")
-    .select("person_id")
-    .where("meeting_id", "=", meetingId)
-    .where("person_id", "in", ids)
-    .execute();
   const checkedInSet = new Set(attendance.map((a) => a.person_id));
 
   return people.map((p) => ({

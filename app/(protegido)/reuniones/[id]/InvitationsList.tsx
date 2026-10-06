@@ -4,8 +4,8 @@ import { useState, useTransition } from "react";
 import type { InvitationRow } from "@/lib/meetings/invitations";
 import { withdrawInvitationAction } from "./acciones";
 
-const RESPONSE_LABEL: Record<string, string> = { pending: "pendiente", confirmed: "sí", declined: "no" };
-const ATTENDANCE_LABEL: Record<string, string> = { unknown: "—", attended: "sí", absent: "no" };
+// Respuesta ≠ asistencia: «Aceptó» no implica que haya asistido. La asistencia sale del check-in real (meeting_attendance), no de la invitación.
+const RESPONSE_LABEL: Record<string, string> = { pending: "Sin respuesta", confirmed: "Aceptó", declined: "Rechazó" };
 
 export function InvitationsList({
   meetingId,
@@ -37,8 +37,8 @@ export function InvitationsList({
           <tr className="border-b border-brand-100 text-xs uppercase text-brand-400">
             <th className="py-1.5 pr-4">Persona</th>
             <th className="py-1.5 pr-4">Invitado</th>
-            <th className="py-1.5 pr-4">Confirmó</th>
-            <th className="py-1.5 pr-4">Asistió</th>
+            <th className="py-1.5 pr-4">Respuesta</th>
+            <th className="py-1.5 pr-4">Asistencia comprobada</th>
             {canManage ? <th className="py-1.5 pr-4"></th> : null}
           </tr>
         </thead>
@@ -50,7 +50,7 @@ export function InvitationsList({
               </td>
               <td className="py-1.5 pr-4">{new Intl.DateTimeFormat("es-AR").format(inv.invitedAt)}</td>
               <td className="py-1.5 pr-4">{RESPONSE_LABEL[inv.responseStatus] ?? inv.responseStatus}</td>
-              <td className="py-1.5 pr-4">{ATTENDANCE_LABEL[inv.attendanceStatus] ?? inv.attendanceStatus}</td>
+              <td className="py-1.5 pr-4">{inv.attended ? "Asistió" : "Sin asistencia registrada"}</td>
               {canManage ? (
                 <td className="py-1.5 pr-4">
                   <button

@@ -5,6 +5,7 @@ import { can } from "@/lib/permissions/can";
 import { getMeetingAssociationIds, getMeetingById } from "@/lib/meetings/queries";
 import { listInvitations } from "@/lib/meetings/invitations";
 import { listMeetingParticipants } from "@/lib/meetings/participants";
+import { loadMeetingMetrics } from "@/lib/activities/metrics";
 import { formatMeetingWhen } from "@/lib/meetings/when";
 import { listAssociations } from "@/lib/associations/queries";
 import { listOrganizations } from "@/lib/organizations/queries";
@@ -30,13 +31,14 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
 
   // Todo en una sola tanda (un round trip de red en vez de dos en serie). Cada función verifica por sí misma el acceso a la
   // reunión y devuelve vacío/null si no corresponde: si no es visible se responde 404 y lo leído se descarta.
-  const [meeting, associations, organizations, associationIds, invitations, participants] = await Promise.all([
+  const [meeting, associations, organizations, associationIds, invitations, participants, metricsMap] = await Promise.all([
     getMeetingById(actor, id),
     listAssociations(actor),
     listOrganizations(),
     getMeetingAssociationIds(actor, id),
     listInvitations(actor, id),
     listMeetingParticipants(actor, id),
+    loadMeetingMetrics(actor, [id]),
   ]);
   if (!meeting) notFound();
   // Un usuario de un área que ve la reunión solo por tener participantes suyos la mira en modo lectura.
@@ -73,7 +75,7 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
         </div>
       </div>
 
-      <ParticipantsSection participants={participants} />
+      <ParticipantsSection participants={participants} metrics={metricsMap.get(id) ?? null} />
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos</h2>

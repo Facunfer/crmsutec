@@ -2,6 +2,8 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { listCampaigns } from "@/lib/campaigns/queries";
+import { loadMeetingMetrics } from "@/lib/activities/metrics";
+import { metricText } from "@/lib/activities/labels";
 import { CAMPAIGN_TYPE_LABEL, campaignDatesLabel, campaignStatusLabel } from "@/lib/campaigns/labels";
 import { listMeetings, type MeetingListFilter } from "@/lib/meetings/queries";
 import { STATUS_LABEL } from "@/lib/meetings/state-machine";
@@ -33,7 +35,11 @@ export default async function ReunionesPage({
   const preselectedAssociationId = sp.associationId || undefined;
 
   const tipo = sp.tipo === "campanas" || sp.tipo === "reuniones" ? sp.tipo : "todas";
-  const [allMeetings, campaigns] = await Promise.all([listMeetings(actor, filter), tipo === "reuniones" ? Promise.resolve([]) : listCampaigns(actor)]);
+  const [allMeetings, campaigns, meetingMetrics] = await Promise.all([
+    listMeetings(actor, filter),
+    tipo === "reuniones" ? Promise.resolve([]) : listCampaigns(actor),
+    tipo === "campanas" ? Promise.resolve(new Map()) : loadMeetingMetrics(actor),
+  ]);
   // Las jornadas de campaña se ven dentro de su campaña; en la tabla de reuniones se marcan para distinguirlas.
   const meetings = tipo === "campanas" ? [] : allMeetings;
   const orgTree = can(actor, "meetings.create") ? await listOrgTreeOptions(actor) : [];
@@ -71,8 +77,10 @@ export default async function ReunionesPage({
                 <th className="py-2 pr-4 font-medium">Tipo</th>
                 <th className="py-2 pr-4 font-medium">Fechas</th>
                 <th className="py-2 pr-4 font-medium">Jornadas</th>
-                <th className="py-2 pr-4 font-medium" title="Personas distintas dentro de tu alcance. 0 significa sin participantes registrados, no que la campaña no haya ocurrido.">Participantes registrados</th>
-                <th className="py-2 pr-4 font-medium">Inscriptas</th>
+                <th className="py-2 pr-4 font-medium">Invitados</th>
+                <th className="py-2 pr-4 font-medium" title="Personas distintas dentro de tu alcance.">Inscriptos</th>
+                <th className="py-2 pr-4 font-medium" title="Personas distintas con participación registrada o asistencia comprobada. 0 significa sin registros cargados, no que la campaña no haya ocurrido.">Participaron</th>
+                <th className="py-2 pr-4 font-medium">Asistieron</th>
                 <th className="py-2 pr-4 font-medium">Estado</th>
               </tr>
             </thead>
@@ -87,8 +95,10 @@ export default async function ReunionesPage({
                   <td className="py-2 pr-4">{CAMPAIGN_TYPE_LABEL[c.type]}</td>
                   <td className="py-2 pr-4">{campaignDatesLabel(c)}</td>
                   <td className="py-2 pr-4">{c.jornadasCount}</td>
-                  <td className="py-2 pr-4">{c.participatedCount}</td>
-                  <td className="py-2 pr-4">{c.registeredCount}</td>
+                  <td className="py-2 pr-4">{metricText(c.metrics.invited)}</td>
+                  <td className="py-2 pr-4">{metricText(c.metrics.registered)}</td>
+                  <td className="py-2 pr-4">{metricText(c.metrics.participated)}</td>
+                  <td className="py-2 pr-4">{metricText(c.metrics.attended)}</td>
                   <td className="py-2 pr-4">
                     <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs text-brand-700">
                       {campaignStatusLabel(c)}
@@ -129,9 +139,11 @@ export default async function ReunionesPage({
               <th className="py-2 pr-4 font-medium">Inicio</th>
               <th className="py-2 pr-4 font-medium">Lugar</th>
               <th className="py-2 pr-4 font-medium">Organizador</th>
-              <th className="py-2 pr-4 font-medium" title="Incluye a quienes participaron de la campaña sin jornada determinada, cuando corresponde.">Participantes</th>
               <th className="py-2 pr-4 font-medium">Invitados</th>
-              <th className="py-2 pr-4 font-medium">Confirmados</th>
+              <th className="py-2 pr-4 font-medium">Aceptaron</th>
+              <th className="py-2 pr-4 font-medium">Inscriptos</th>
+              <th className="py-2 pr-4 font-medium" title="Personas distintas con participación registrada o asistencia comprobada. 0 significa sin registros cargados, no que la actividad no haya ocurrido.">Participaron</th>
+              <th className="py-2 pr-4 font-medium">Asistieron</th>
               <th className="py-2 pr-4 font-medium">Estado</th>
             </tr>
           </thead>
@@ -153,21 +165,15 @@ export default async function ReunionesPage({
                 <td className="py-2 pr-4">{formatMeetingWhen(m)}</td>
                 <td className="py-2 pr-4">{m.locationName ?? "—"}</td>
                 <td className="py-2 pr-4">{m.organizerName ?? "—"}</td>
-                <td className="py-2 pr-4">
-                  <Link
-                    href={`/reuniones/${m.id}`}
-                    className="hover:underline"
-                    title={
-                      m.campaignParticipantsCount !== null && m.campaignParticipantsCount > 0
-                        ? `Incluye ${m.campaignParticipantsCount} persona(s) que participaron de la campaña sin jornada determinada (no se les adivinó el día). Ver detalle.`
-                        : undefined
-                    }
-                  >
-                    {m.participantsCount + (m.campaignParticipantsCount ?? 0)}
-                  </Link>
-                </td>
-                <td className="py-2 pr-4">{m.invitedCount}</td>
-                <td className="py-2 pr-4">{m.confirmedCount}</td>
+                {/* Conteos de ESTA reunión/jornada (personas distintas, en tu alcance). Los registrados solo a nivel campaña, sin jornada determinada, se ven en la campaña. */}
+                {(["invited", "accepted", "registered", "participated", "attended"] as const).map((k) => {
+                  const mm = meetingMetrics.get(m.id);
+                  return (
+                    <td key={k} className="py-2 pr-4" title={m.campaignId && k === "participated" ? "No incluye a quienes quedaron registrados a nivel campaña sin jornada determinada: ver la campaña." : undefined}>
+                      {mm ? metricText(mm[k]) : "—"}
+                    </td>
+                  );
+                })}
                 <td className="py-2 pr-4">
                   <span className={`rounded-full px-2 py-0.5 text-xs ${STATUS_BADGE[m.displayStatus]}`}>
                     {STATUS_LABEL[m.displayStatus]}

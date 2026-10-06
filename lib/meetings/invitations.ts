@@ -5,7 +5,9 @@ import { toJsonb } from "../db/json.js";
 import type { Json } from "../db/schema.js";
 import type { SessionUser } from "../permissions/can.js";
 import { resolveAudienceIds, type MeetingAudienceSpec } from "./audience.js";
-import { canAccessMeeting } from "../scope/organizations.js";
+import { canAccessMeeting, isUuid } from "../scope/organizations.js";
+import { sql } from "kysely";
+import { ATTENDANCE_ACTIVE } from "../activities/metrics.js";
 import { canManageInvitations, STATUS_LABEL } from "./state-machine.js";
 import { generateInvitationToken, hashInvitationToken } from "./tokens.js";
 
@@ -144,17 +146,20 @@ export interface InvitationRow {
   firstName: string;
   lastName: string;
   responseStatus: string;
+  /** DEPRECADO (legacy): campo `attendance_status` de la invitación. Ya no es fuente de asistencia; usar `attended`. */
   attendanceStatus: string;
+  /** Asistencia presencial comprobada vigente (meeting_attendance), independiente de la invitación. */
+  attended: boolean;
   invitedAt: Date;
   respondedAt: Date | null;
   withdrawn: boolean;
 }
 
 export async function listInvitations(actor: SessionUser, meetingId: string): Promise<InvitationRow[]> {
-  if (!(await canAccessMeeting(actor, meetingId))) return [];
-
+  if (!isUuid(meetingId)) return [];
+  // Acceso y lectura son independientes: una sola tanda; si no hay acceso, lo leído se descarta.
   const db = await getDb();
-  const rows = await db
+  const rowsQuery = db
     .selectFrom("meeting_invitations")
     .innerJoin("people", "people.id", "meeting_invitations.person_id")
     .select([
@@ -164,13 +169,15 @@ export async function listInvitations(actor: SessionUser, meetingId: string): Pr
       "people.last_name",
       "meeting_invitations.response_status",
       "meeting_invitations.attendance_status",
+      sql<boolean>`exists (select 1 from meeting_attendance ma where ma.meeting_id = meeting_invitations.meeting_id and ma.person_id = meeting_invitations.person_id and ${ATTENDANCE_ACTIVE})`.as("attended"),
       "meeting_invitations.invited_at",
       "meeting_invitations.responded_at",
       "meeting_invitations.withdrawn_at",
     ])
     .where("meeting_invitations.meeting_id", "=", meetingId)
-    .orderBy("people.last_name", "asc")
-    .execute();
+    .orderBy("people.last_name", "asc");
+  const [allowed, rows] = await Promise.all([canAccessMeeting(actor, meetingId), rowsQuery.execute()]);
+  if (!allowed) return [];
 
   return rows.map((r) => ({
     id: r.id,
@@ -179,6 +186,7 @@ export async function listInvitations(actor: SessionUser, meetingId: string): Pr
     lastName: r.last_name,
     responseStatus: r.response_status,
     attendanceStatus: r.attendance_status,
+    attended: r.attended,
     invitedAt: r.invited_at,
     respondedAt: r.responded_at,
     withdrawn: r.withdrawn_at !== null,

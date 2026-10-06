@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { requirePermission } from "@/lib/auth/guard";
 import { getCampaignById, listCampaignParticipants } from "@/lib/campaigns/queries";
 import { CAMPAIGN_TYPE_LABEL, campaignDatesLabel, campaignStatusLabel, formatDay } from "@/lib/campaigns/labels";
+import { FactChips, MetricsPanel } from "../../ActivityWidgets";
 
 const PAGE_SIZE = 50;
 
@@ -54,28 +55,14 @@ export default async function CampanaPage({
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Resumen (personas distintas, dentro de tu alcance)</h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-          <div>
-            <dt className="text-brand-400">Participantes registrados</dt>
-            <dd className="text-lg font-semibold text-brand-900">{campaign.participatedCount}</dd>
-          </div>
-          <div>
-            <dt className="text-brand-400">Inscriptas</dt>
-            <dd className="text-lg font-semibold text-brand-900">{campaign.registeredCount}</dd>
-          </div>
-          <div>
-            <dt className="text-brand-400">Invitaciones</dt>
-            <dd className="text-sm text-brand-500">No disponible</dd>
-          </div>
-          <div>
-            <dt className="text-brand-400">Asistencia presencial comprobada</dt>
-            <dd className="text-sm text-brand-500">Sin información</dd>
-          </div>
-        </dl>
-        <p className="mt-3 text-xs text-brand-400">
-          Una persona se cuenta una sola vez aunque figure a nivel campaña y en una o más jornadas. «Participaron» e «Inscriptas» pueden solaparse: no se suman.
-          Participar según la fuente no es asistir: la asistencia solo se registra por check-in real.
-        </p>
+        <MetricsPanel
+          metrics={campaign.metrics}
+          caption={
+            campaign.origin === "import"
+              ? "Campaña importada: Inscriptos y Participaron salen de los registros cargados (0 significa «sin registros cargados», no que la campaña no haya ocurrido). Una persona se cuenta una sola vez aunque figure a nivel campaña y en una o más jornadas; las categorías se solapan y no se suman. Participar según un registro no es asistir."
+              : undefined
+          }
+        />
       </section>
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
@@ -134,7 +121,7 @@ export default async function CampanaPage({
                   <th className="py-2 pr-4 font-medium">DNI</th>
                   <th className="py-2 pr-4 font-medium">Área</th>
                   <th className="py-2 pr-4 font-medium">Repartición</th>
-                  <th className="py-2 pr-4 font-medium">Situación</th>
+                  <th className="py-2 pr-4 font-medium">Hechos</th>
                 </tr>
               </thead>
               <tbody>
@@ -148,8 +135,12 @@ export default async function CampanaPage({
                     <td className="py-1.5 pr-4">{p.dni ?? "—"}</td>
                     <td className="py-1.5 pr-4">{p.areaName ?? "—"}</td>
                     <td className="py-1.5 pr-4">{p.reparticionName ?? "—"}</td>
-                    <td className="py-1.5 pr-4 text-xs text-brand-600">
-                      {[p.participated ? "Participó" : null, p.registered ? "Inscripta" : null, p.inJornada ? "con jornada" : "sin jornada determinada"].filter(Boolean).join(" · ")}
+                    <td className="py-1.5 pr-4">
+                      <FactChips
+                        facts={{ invited: p.response !== null, response: p.response, registered: p.registered, participated: p.participated, participationBases: p.participationBases, attended: p.attended }}
+                        provenance={p.inJornada ? undefined : "Registrada a nivel campaña, sin jornada determinada"}
+                      />
+                      {!p.inJornada ? <span className="mt-0.5 block text-xs text-brand-400">sin jornada determinada</span> : null}
                     </td>
                   </tr>
                 ))}

@@ -7,7 +7,7 @@ interface LivePanelData {
   invited: number;
   confirmed: number;
   present: number;
-  absentSoFar: number;
+  invitedNotArrived: number;
   pendingResponse: number;
   declined: number;
   attendanceRate: number | null;
@@ -108,13 +108,22 @@ export function LivePanel({ meetingId }: { meetingId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-7">
         <Stat label="Invitados" value={data.invited} />
-        <Stat label="Confirmaron" value={data.confirmed} />
+        <Stat label="Aceptaron" value={data.confirmed} />
         <Stat label="Presentes" value={data.present} highlight />
         <Stat label="Pendientes" value={data.pendingResponse} />
         <Stat label="Rechazaron" value={data.declined} />
-        <Stat label="% asistencia" value={data.attendanceRate === null ? "—" : `${data.attendanceRate}%`} />
+        <Stat
+          label="Sin asistencia registrada"
+          value={data.invitedNotArrived}
+          hint="Invitados vigentes que todavía no tienen check-in. La falta de check-in no es evidencia de ausencia."
+        />
+        <Stat
+          label="Asistencia sobre invitados"
+          value={data.attendanceRate === null ? "—" : `${data.attendanceRate}%`}
+          hint="Invitados vigentes con asistencia registrada, sobre el total de invitados vigentes. No incluye a quienes asistieron sin invitación."
+        />
       </div>
 
       <div className="rounded-lg bg-white p-4 shadow-sm">
@@ -175,7 +184,7 @@ export function LivePanel({ meetingId }: { meetingId: string }) {
           ))}
         </ListCard>
 
-        <ListCard title={`Confirmaron, no llegaron (${data.confirmedNotArrived.length})`}>
+        <ListCard title={`Aceptaron, sin asistencia registrada (${data.confirmedNotArrived.length})`}>
           {data.confirmedNotArrived.map((p) => (
             <li key={p.personId} className="flex items-center justify-between py-1 text-sm">
               <span>
@@ -213,9 +222,9 @@ export function LivePanel({ meetingId }: { meetingId: string }) {
   );
 }
 
-function Stat({ label, value, highlight }: { label: string; value: number | string; highlight?: boolean }) {
+function Stat({ label, value, highlight, hint }: { label: string; value: number | string; highlight?: boolean; hint?: string }) {
   return (
-    <div className={`rounded-lg p-3 text-center shadow-sm ${highlight ? "bg-brand-600 text-white" : "bg-white text-brand-900"}`}>
+    <div title={hint} className={`rounded-lg p-3 text-center shadow-sm ${highlight ? "bg-brand-600 text-white" : "bg-white text-brand-900"}`}>
       <p className="text-xl font-semibold">{value}</p>
       <p className={`text-xs ${highlight ? "text-brand-100" : "text-brand-400"}`}>{label}</p>
     </div>
