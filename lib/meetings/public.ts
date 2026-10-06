@@ -4,6 +4,7 @@ import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/p
 import { isPubliclyRespondable } from "./state-machine.js";
 import { hashInvitationToken } from "./tokens.js";
 import { checkInWithInvitationToken } from "../attendance/checkin.js";
+import { insertInvitationEvents } from "./invitations.js";
 
 assertServerOnly("lib/meetings/public.ts");
 
@@ -103,6 +104,15 @@ export async function getInvitationByToken(token: string, ip: string): Promise<I
 
 export type RespondResult = { ok: true } | { ok: false; reason: "invalid" | "locked" | "rate_limited" };
 
+/**
+ * Respuesta DIRECTA de la persona por su enlace. Estado + evento en UNA transacción con la invitación bloqueada (FOR UPDATE):
+ * ver la invariante de integridad en lib/meetings/invitations.ts.
+ *
+ * Idempotencia SEMÁNTICA: repetir la MISMA respuesta (doble clic, refresh, reintento, otra pestaña) es un NO-OP — no actualiza
+ * `responded_at`, no genera evento, aunque el nuevo request traiga otro instante. Solo un cambio real de estado
+ * (aceptó ↔ rechazó) actualiza la fila y registra `response_changed`. La primera respuesta registra `responded`.
+ * `response_recorded_by` queda en NULL: una respuesta pública nunca se atribuye a un usuario interno.
+ */
 export async function respondToInvitation(
   token: string,
   response: "confirmed" | "declined",
@@ -114,32 +124,59 @@ export async function respondToInvitation(
   const db = await getDb();
   const tokenHash = hashInvitationToken(token);
 
-  const row = await db
-    .selectFrom("meeting_invitations")
-    .innerJoin("meetings", "meetings.id", "meeting_invitations.meeting_id")
-    .select(["meeting_invitations.id", "meeting_invitations.meeting_id", "meetings.status as meeting_status", "meeting_invitations.withdrawn_at"])
-    .where("meeting_invitations.token_hash", "=", tokenHash)
-    .executeTakeFirst();
+  const result = await db.transaction().execute(async (trx): Promise<RespondResult> => {
+    const row = await trx
+      .selectFrom("meeting_invitations")
+      .innerJoin("meetings", "meetings.id", "meeting_invitations.meeting_id")
+      .select([
+        "meeting_invitations.id",
+        "meeting_invitations.meeting_id",
+        "meeting_invitations.person_id",
+        "meeting_invitations.response_status",
+        "meeting_invitations.withdrawn_at",
+        "meetings.status as meeting_status",
+      ])
+      .where("meeting_invitations.token_hash", "=", tokenHash)
+      .forUpdate("meeting_invitations")
+      .executeTakeFirst();
 
-  if (!row || row.withdrawn_at) {
-    await recordPublicLinkAttempt("invitation_respond", token, ip, false);
-    return { ok: false, reason: "invalid" };
-  }
-  if (!isPubliclyRespondable(row.meeting_status)) {
-    await recordPublicLinkAttempt("invitation_respond", token, ip, false);
-    return { ok: false, reason: "locked" };
-  }
+    if (!row || row.withdrawn_at) return { ok: false, reason: "invalid" };
+    if (!isPubliclyRespondable(row.meeting_status)) return { ok: false, reason: "locked" };
+    if (row.response_status === response) return { ok: true }; // NO-OP: misma respuesta repetida
 
-  await db
-    .updateTable("meeting_invitations")
-    .set({ response_status: response, responded_at: new Date() })
-    .where("id", "=", row.id)
-    .execute();
+    const now = new Date(); // después del bloqueo: orden real de los eventos
+    await trx
+      .updateTable("meeting_invitations")
+      .set({
+        response_status: response,
+        responded_at: now,
+        responded_at_precision: "exact_datetime",
+        response_channel: "public_link",
+        response_recorded_by: null,
+        response_recorded_at: now,
+      })
+      .where("id", "=", row.id)
+      .execute();
+    await insertInvitationEvents(trx, [
+      {
+        invitation_id: row.id,
+        meeting_id: row.meeting_id,
+        person_id: row.person_id,
+        event_type: row.response_status === "pending" ? "responded" : "response_changed",
+        occurred_at: now,
+        recorded_by: null,
+        response_status_from: row.response_status,
+        response_status_to: response,
+        response_channel: "public_link",
+        responded_at: now,
+        responded_at_precision: "exact_datetime",
+      },
+    ]);
+    return { ok: true };
+  });
 
-  await recordPublicLinkAttempt("invitation_respond", token, ip, true);
-
-
-  return { ok: true };
+  await recordPublicLinkAttempt("invitation_respond", token, ip, result.ok);
+  return result;
 }
 
 export type CheckinByTokenResult =

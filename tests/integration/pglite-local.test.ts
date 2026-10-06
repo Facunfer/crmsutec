@@ -57,7 +57,9 @@ describe("PGlite local limpio (SUTECBA_ENV=local)", () => {
     expect(out).toContain("0034_people_list_performance.sql OK");
     expect(out).toContain("0035_people_search_trigram.sql OK");
     expect(out).toContain("0036_campaigns.sql OK");
-    expect(out).toContain("12 migración(es) aplicada(s)");
+    expect(out).toContain("0037_invitation_response_metadata.sql OK");
+    expect(out).toContain("0038_meeting_invitation_events.sql OK");
+    expect(out).toContain("14 migración(es) aplicada(s)");
     expect(status).toBe(0);
   }, 300000);
 

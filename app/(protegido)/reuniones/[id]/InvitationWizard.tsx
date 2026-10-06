@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { AssociationListItem } from "@/lib/associations/queries";
 import type { OrganizationItem } from "@/lib/organizations/queries";
 import type { CreatedInvitationLink } from "@/lib/meetings/invitations";
+import { INVITATION_CHANNELS, INVITATION_CHANNEL_LABEL, INVITATION_CHANNEL_NOTE } from "@/lib/activities/labels";
 import { countAudienceAction, createInvitationBatchAction, searchPersonForInvitationAction } from "./acciones";
 
 function downloadCsv(filename: string, links: CreatedInvitationLink[], baseUrl: string) {
@@ -39,6 +40,7 @@ export function InvitationWizard({
     { createdCount: number; revivedCount: number; alreadyInvitedCount: number; links: CreatedInvitationLink[] } | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [channel, setChannel] = useState<string>("");
 
   const spec = useMemo(
     () => ({
@@ -77,7 +79,7 @@ export function InvitationWizard({
     setPending(true);
     setError(null);
     setBatchResult(null);
-    const result = await createInvitationBatchAction(meetingId, spec);
+    const result = await createInvitationBatchAction(meetingId, spec, channel || null);
     setPending(false);
     if (result.ok) {
       setBatchResult(result.result);
@@ -202,6 +204,24 @@ export function InvitationWizard({
       ) : (
         <p className="text-sm text-brand-400">Todavía no elegiste ninguna fuente de audiencia.</p>
       )}
+
+      <div>
+        <label className="block text-xs text-brand-500" htmlFor="invitation-channel">Canal por el que invitás (opcional)</label>
+        <select
+          id="invitation-channel"
+          value={channel}
+          onChange={(e) => setChannel(e.target.value)}
+          className="mt-1 rounded-md border border-brand-200 px-2 py-1.5 text-sm"
+        >
+          <option value="">No registrar</option>
+          {INVITATION_CHANNELS.map((c) => (
+            <option key={c} value={c}>
+              {INVITATION_CHANNEL_LABEL[c]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-brand-400">{INVITATION_CHANNEL_NOTE} Cada persona recibe un enlace personal que vos compartís.</p>
+      </div>
 
       <div className="flex items-center gap-3">
         <button

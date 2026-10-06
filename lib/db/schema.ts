@@ -329,6 +329,11 @@ export interface MeetingInvitationBatchesTable {
 }
 
 export type InvitationResponseStatus = "pending" | "confirmed" | "declined";
+/** Canal de COMUNICACIÓN por el que se invitó (registro manual; el CRM no envía mensajes). */
+export type InvitationChannel = "whatsapp" | "email" | "sms" | "phone" | "in_person" | "other";
+/** Cómo llegó la respuesta. `public_link` = la propia persona por su enlace (response_recorded_by NULL). */
+export type InvitationResponseChannel = "public_link" | InvitationChannel;
+export type InvitationEventType = "invited" | "responded" | "response_changed" | "withdrawn" | "reinvited";
 export type InvitationAttendanceStatus = "unknown" | "attended" | "absent";
 
 export interface MeetingInvitationsTable {
@@ -339,11 +344,40 @@ export interface MeetingInvitationsTable {
   token_hash: string;
   response_status: Generated<InvitationResponseStatus>;
   attendance_status: Generated<InvitationAttendanceStatus>;
+  /** Forma TÉCNICA de creación/entrega (p. ej. manual_link). No es el canal de comunicación: ver invitation_channel. */
   channel: Generated<string>;
   invited_at: Generated<Date>;
   responded_at: Date | null;
   withdrawn_at: Date | null;
   withdrawn_by: string | null;
+  // 0037 — metadata de invitación y respuesta
+  invited_by: string | null;
+  invitation_channel: InvitationChannel | null;
+  response_channel: InvitationResponseChannel | null;
+  /** NULL ⇔ respondió la propia persona por el enlace público. */
+  response_recorded_by: string | null;
+  responded_at_precision: "exact_datetime" | "date_only" | null;
+  response_recorded_at: Date | null;
+}
+
+/** 0038 — historial append-only de invitaciones. `meeting_invitations` es el estado actual. */
+export interface MeetingInvitationEventsTable {
+  id: Generated<string>;
+  /** Orden de inserción real (bigint identity; llega como string). */
+  seq: Generated<string>;
+  invitation_id: string;
+  meeting_id: string;
+  person_id: string;
+  event_type: InvitationEventType;
+  occurred_at: Generated<Date>;
+  recorded_by: string | null;
+  batch_id: string | null;
+  invitation_channel: InvitationChannel | null;
+  response_status_from: InvitationResponseStatus | null;
+  response_status_to: InvitationResponseStatus | null;
+  response_channel: InvitationResponseChannel | null;
+  responded_at: Date | null;
+  responded_at_precision: "exact_datetime" | "date_only" | null;
 }
 
 export interface MeetingAttendanceTable {
@@ -736,6 +770,7 @@ export interface Database {
   meeting_associations: MeetingAssociationsTable;
   meeting_invitation_batches: MeetingInvitationBatchesTable;
   meeting_invitations: MeetingInvitationsTable;
+  meeting_invitation_events: MeetingInvitationEventsTable;
   meeting_attendance: MeetingAttendanceTable;
   forms: FormsTable;
   form_versions: FormVersionsTable;

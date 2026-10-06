@@ -96,20 +96,50 @@ Se preservan Master / Área / Repartición, personas sin organización fuera de 
 campañas/reuniones. No se implementa la Fase C de permisos; hasta entonces inscribir usa `meetings.manage_invitations` y registrar/revocar
 asistencia usa `meetings.attendance_manual`, siempre con la persona dentro del alcance del usuario.
 
-## 7. Migraciones previstas (desde 0037; aditivas, idempotentes, sin backfill ni inferencia)
+## 7. Migraciones (desde 0037; aditivas, idempotentes, sin backfill ni inferencia)
 
-- **0037 (B2)** — `invited_by`, `response_channel`, `response_recorded_by` en `meeting_invitations`.
-- **0038 (B3)** — `meeting_attendance`: método `qr`/`invitation_link`, `identification`, `recorded_at`, `occurred_precision`, `revoked_*`; guard actualizado;
+- **0037 (B2)** — metadata de invitación y respuesta en `meeting_invitations`: `invited_by`, `invitation_channel`, `response_channel`,
+  `response_recorded_by`, `responded_at_precision`, `response_recorded_at` + constraints de coherencia (pendiente sin datos de respuesta;
+  respondida con canal y fecha de registro; enlace público ⇒ sin usuario y exacto; canal de staff ⇒ operador; fecha desconocida solo por staff;
+  `date_only` = medianoche de Buenos Aires; nunca una fecha de respuesta posterior al registro).
+- **0038 (B2)** — `meeting_invitation_events`: historial append-only (eventos `invited`, `responded`, `response_changed`, `withdrawn`, `reinvited`),
+  columnas relacionales, FK compuesta a la invitación, trigger append-only, RLS, SELECT/INSERT para la app.
+- **0039 (B3)** — `meeting_attendance`: método `qr`/`invitation_link`, `identification`, `recorded_at`, `occurred_precision`, `revoked_*`; guard actualizado;
   índice por `person_id`; tabla `meeting_attendance_events` (solo inserción).
-- **0039 (B4)** — `meeting_participations`: `registered_at` (NULL en lo histórico), `recorded_by`, `origin_channel`, anulación `voided_*` solo para inscripciones `standard`.
+- **0040 (B4)** — `meeting_participations`: `registered_at` (NULL en lo histórico), `recorded_by`, `origin_channel`, anulación `voided_*` solo para inscripciones `standard`.
 - No se endurece el CHECK de `participation_kind` (los tipos sobrantes `invited/attended/absent/approved/unknown` quedan intactos).
+
+### 7.1 B2 — invitación y respuesta (reglas)
+
+- **Canales.** `channel` (existente, `manual_link`) es la forma TÉCNICA de creación/entrega y no se reinterpreta. `invitation_channel` es el canal de
+  COMUNICACIÓN (`whatsapp`, `email`, `sms`, `phone`, `in_person`, `other`; NULL = no registrado). Registrarlo NO significa que el CRM haya enviado algo.
+  `response_channel` suma `public_link`; «cargada manualmente» no es un canal: es `response_recorded_by`. El canal vive en cada invitación (la tanda no lo guarda).
+- **Respuesta directa vs staff.** Por el enlace: `response_recorded_by` NULL, `responded_at` exacto. Por un operador: `response_recorded_by` = usuario,
+  `responded_at` exacto / solo el día / NULL (desconocida; nunca se inventa con `response_recorded_at`).
+- **DB mantiene `confirmed`; la UI dice «Aceptó».**
+- **Idempotencia.** Repetir la MISMA respuesta pública (doble clic, refresh, retry) es NO-OP: no cambia `responded_at` ni genera evento.
+  `response_changed` con `from = to` está reservado a una corrección explícita de metadata (canal/fecha/precisión) hecha por staff.
+- **Reinvitación.** Solo sobre una invitación retirada: una transacción con `FOR UPDATE` que registra `reinvited` (con el estado previo) y reinicia la fila
+  (token nuevo, respuesta pendiente sin datos, retiro limpio). La historia queda en los eventos. `attendance_status` se reinicia como antes (campo deprecado; B3).
+- **Permisos y alcance (temporal hasta la Fase C).** Invitar, retirar y registrar una respuesta exigen `meetings.manage_invitations` + acceso a la reunión +
+  persona dentro del alcance. `listInvitations` filtra por persona en alcance; los nombres de usuarios internos (quién invitó / quién registró) solo se ven con ese permiso.
+
+### 7.2 INVARIANTE DE INTEGRIDAD DEL HISTORIAL (B2)
+
+> **Toda mutación de estado o de metadata semántica de `meeting_invitations` debe pasar exclusivamente por los comandos transaccionales del módulo de
+> invitaciones** (`lib/meetings/invitations.ts` y `respondToInvitation` en `lib/meetings/public.ts`), **que actualizan el estado y registran su evento en la misma
+> transacción, con la invitación bloqueada (`FOR UPDATE`).**
+
+La base impone combinaciones imposibles (0037) y que el historial sea append-only (0038), pero NO impone que exista un evento por cada cambio. No hay triggers
+que lo hagan (decisión: el contexto —canal, responsable— ya viene en los comandos). Un test sobre el código fuente es una defensa adicional, no una garantía.
+Los escritores heredados de `attendance_status` (`commands.ts`, `manual.ts`, `checkin.ts`) solo tocan ese campo deprecado y se reemplazan en B3.
 
 ## 8. Subetapas (aprobación independiente para cada una)
 
 1. **B1** — lectura/UI/conteos: módulo común de métricas, chips de hechos, copy de procedencia, optimización de round trips. Sin migraciones ni escrituras.
-2. **B2** — metadata de invitación/respuesta (0037).
-3. **B3** — asistencia, undo real, auditoría y check-in (0038).
-4. **B4** — inscripción operativa (0039).
+2. **B2** — metadata de invitación/respuesta e historial (0037 + 0038).
+3. **B3** — asistencia, undo real, auditoría y check-in (0039).
+4. **B4** — inscripción operativa (0040).
 5. **B5** — timeline de Persona (actividad separada de contacto).
 6. **B6** — cierre, performance y producción.
 

@@ -154,3 +154,32 @@ export const ACTIVITY_FACT_COUNTS_AS_CONTACT: Record<"invitation" | "response" |
   participation: false,
   attendance: false,
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Invitación y respuesta (B2). Canal de COMUNICACIÓN registrado a mano: el CRM no envía mensajes.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const INVITATION_CHANNELS = ["whatsapp", "email", "sms", "phone", "in_person", "other"] as const;
+export type InvitationChannelValue = (typeof INVITATION_CHANNELS)[number];
+
+export const INVITATION_CHANNEL_LABEL: Record<InvitationChannelValue, string> = {
+  whatsapp: "WhatsApp",
+  email: "Correo",
+  sms: "SMS",
+  phone: "Llamada",
+  in_person: "En persona",
+  other: "Otro",
+};
+
+/** Canales con los que un OPERADOR puede registrar una respuesta (el enlace público lo usa solo la propia persona). */
+export const STAFF_RESPONSE_CHANNELS = INVITATION_CHANNELS;
+export const RESPONSE_CHANNEL_LABEL: Record<InvitationChannelValue | "public_link", string> = { ...INVITATION_CHANNEL_LABEL, public_link: "Enlace de la invitación" };
+
+/** Respuesta: en base `confirmed`, en pantalla «Aceptó». */
+export const INVITATION_RESPONSE_LABEL: Record<InvitationResponse, string> = { confirmed: "Aceptó", declined: "Rechazó", pending: "Sin respuesta" };
+
+export const INVITATION_CHANNEL_NOTE = "Esto solo registra el canal por el que invitás: el CRM no envía ningún mensaje.";
+
+export function isInvitationChannel(value: unknown): value is InvitationChannelValue {
+  return typeof value === "string" && (INVITATION_CHANNELS as readonly string[]).includes(value);
+}

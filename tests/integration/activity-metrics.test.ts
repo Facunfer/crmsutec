@@ -95,7 +95,15 @@ beforeAll(async () => {
   await meeting("j2", { ...manual, source_event_key: null });
 
   const invite = (m: string, p: string, response: string, extra: Record<string, unknown> = {}) =>
-    db.insertInto("meeting_invitations").values({ meeting_id: M[m]!, person_id: P[p]!, token_hash: randomUUID(), response_status: response, ...extra } as never).execute();
+    // Fixture coherente con los constraints de 0037: una respuesta no pendiente la cargó un operador por un canal real.
+    db
+      .insertInto("meeting_invitations")
+      .values({
+        meeting_id: M[m]!, person_id: P[p]!, token_hash: randomUUID(), response_status: response,
+        ...(response === "pending" ? {} : { response_channel: "phone", response_recorded_by: masterId, response_recorded_at: new Date() }),
+        ...extra,
+      } as never)
+      .execute();
   const attend = (m: string, p: string) =>
     db.insertInto("meeting_attendance").values({ meeting_id: M[m]!, person_id: P[p]!, method: "manual", registered_by: masterId, correction_reason: "test" } as never).execute();
   const part = (m: string | null, ck: string | null, p: string, kind: string, basis = "standard") =>

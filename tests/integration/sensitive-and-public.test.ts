@@ -455,10 +455,11 @@ describe("historial de reuniones de una persona trasladada", () => {
     // así que el traslado lo hace Master Global, como corresponde ahora entre áreas sin alcance compartido).
     await transferPerson(master, id("pHist"), o("B"), "Cambio de destino");
 
-    // El historial de la reunión de A conserva el nombre...
+    // B2 (decisión aprobada): la lista de INVITACIONES filtra por personas dentro del alcance de quien mira. Al trasladarse
+    // fuera del alcance de A, su invitación deja de listarse para A (antes seguía visible por nombre). El panel en vivo y la
+    // asistencia no cambian: conservan el nombre en el historial de la reunión.
     const invitations = await invitationsLib.listInvitations(adminA, id("mOpen"));
-    const row = invitations.find((i) => i.personId === id("pHist"));
-    expect(row?.firstName).toBe("Historica");
+    expect(invitations.find((i) => i.personId === id("pHist"))).toBeUndefined();
     const panel = await getLivePanelData(adminA, id("mOpen"));
     expect(panel!.arrived.map((p) => p.firstName)).toContain("Historica");
 
