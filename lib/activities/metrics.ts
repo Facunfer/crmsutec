@@ -12,11 +12,10 @@ assertServerOnly("lib/activities/metrics.ts");
  * Todo es DISTINCT person_id dentro del alcance del usuario (`personInScope`); las categorías solapadas nunca se suman.
  * Definiciones exactas: docs/FASE-B-DISENO.md §3.
  *
- * Asistencia canónica = meeting_attendance VIGENTE. `meeting_invitations.attendance_status` está deprecado y NO se lee.
- * `ATTENDANCE_ACTIVE` es el único lugar a cambiar cuando B3 agregue la revocación (`ma.revoked_at is null`): hasta entonces
- * no existe forma de revocar una fila, así que toda fila es vigente.
+ * Asistencia canónica = meeting_attendance VIGENTE (`revoked_at IS NULL`, B3). `meeting_invitations.attendance_status` está
+ * deprecado y NO se lee. Los fragmentos SQL que usan esta constante nombran la tabla con el alias `ma`.
  */
-export const ATTENDANCE_ACTIVE = sql`true`;
+export const ATTENDANCE_ACTIVE = sql`ma.revoked_at is null`;
 
 /** Participación explícita que cuenta como «participó» (no incluye registration). */
 export const PARTICIPATED_KINDS = sql`('participated', 'attended')`;

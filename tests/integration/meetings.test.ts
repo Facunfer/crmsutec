@@ -120,7 +120,7 @@ describe("ABM y máquina de estados (integración)", () => {
     expect((await db.selectFrom("meetings").select("meeting_type").where("id", "=", training.id).executeTakeFirstOrThrow()).meeting_type).toBe("capacitacion");
   });
 
-  it("al finalizar, las invitaciones sin respuesta de asistencia quedan 'absent' (se congela el resultado)", async () => {
+  it("al finalizar NO se crean ausencias: la falta de check-in no es evidencia de ausencia (B3)", async () => {
     const { id } = await createMeeting(actor, { ownerOrganizationId: ownerOrgId, name: "Reunión Finaliza", ...futureMeetingInput(), description: "", locationName: "", address: "", notes: "" });
     await changeMeetingStatus(actor, id, "scheduled");
 
@@ -131,7 +131,10 @@ describe("ABM y máquina de estados (integración)", () => {
     await changeMeetingStatus(actor, id, "finished");
 
     const [invitation] = await listInvitations(actor, id);
-    expect(invitation?.attendanceStatus).toBe("absent");
+    expect(invitation?.attended).toBe(false); // «Sin asistencia registrada», no «ausente»
+    const db = await getDb();
+    const row = await db.selectFrom("meeting_invitations").select("attendance_status").where("meeting_id", "=", id).executeTakeFirstOrThrow();
+    expect(row.attendance_status).toBe("unknown"); // finalizar ya no escribe attendance_status (deprecado)
   });
 
   it("una reunión finalizada no deja tocar sus asociaciones relacionadas (server-side, no solo la UI)", async () => {

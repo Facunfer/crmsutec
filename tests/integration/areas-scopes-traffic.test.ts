@@ -392,34 +392,27 @@ describe("Interacción automática por participación real (idempotente)", () =>
     expect((await syncParticipationInteractions(db, { actorUserId: masterId })).created).toBe(0);
   });
 
-  it("el check-in real genera la interacción; corregido a 'ausente' se anula; vuelto a 'asistió' se reactiva", async () => {
+  it("la ASISTENCIA no genera interacciones (B3, Opción B): ni al registrarse, ni al revocarse, ni al restaurarse", async () => {
     const db = await getDb();
     const inv = await db
       .insertInto("meeting_invitations")
-      .values({ meeting_id: M.soloHacienda!, person_id: P.hRaiz!, token_hash: randomUUID(), attendance_status: "attended" } as never)
+      .values({ meeting_id: M.soloHacienda!, person_id: P.hRaiz!, token_hash: randomUUID() } as never)
       .returning("id")
       .executeTakeFirstOrThrow();
     const att = await db
       .insertInto("meeting_attendance")
-      .values({ meeting_id: M.soloHacienda!, person_id: P.hRaiz!, invitation_id: inv.id, method: "dni" } as never)
+      .values({ meeting_id: M.soloHacienda!, person_id: P.hRaiz!, invitation_id: inv.id, method: "qr", identification: "dni" } as never)
       .returning("id")
       .executeTakeFirstOrThrow();
-    const created = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
-    expect(created.created).toBe(1);
-    const key = `meeting_attendance:${att.id}`;
-    const status = async () => (await db.selectFrom("person_interactions").select(["status", "occurred_precision"]).where("source_key", "=", key).executeTakeFirstOrThrow());
-    expect(await status()).toMatchObject({ status: "completed", occurred_precision: "exact_datetime" });
-    expect((await getPersonTraffic(master, P.hRaiz!))?.trafficLight).toBe("green");
-
-    await db.updateTable("meeting_invitations").set({ attendance_status: "absent" }).where("id", "=", inv.id).execute();
-    const voided = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
-    expect(voided.voided).toBe(1);
-    expect((await status()).status).toBe("voided");
-    expect((await getPersonTraffic(master, P.hRaiz!))?.trafficLight).toBe("gray");
-
-    await db.updateTable("meeting_invitations").set({ attendance_status: "attended" }).where("id", "=", inv.id).execute();
-    expect((await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId })).reactivated).toBe(1);
-    expect((await status()).status).toBe("completed");
+    const before = await db.selectFrom("person_interactions").select(sql<number>`count(*)::int`.as("n")).executeTakeFirstOrThrow();
+    const result = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
+    expect(result.created).toBe(0);
+    expect((await db.selectFrom("person_interactions").select(sql<number>`count(*)::int`.as("n")).executeTakeFirstOrThrow()).n).toBe(before.n);
+    expect(await db.selectFrom("person_interactions").select("id").where("source_key", "=", `meeting_attendance:${att.id}`).execute()).toHaveLength(0);
+    // revocar / restaurar tampoco tocan interacciones
+    await db.updateTable("meeting_attendance").set({ revoked_at: new Date(), revoked_by: masterId, revoke_reason: "prueba" } as never).where("id", "=", att.id).execute();
+    const afterRevoke = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
+    expect(afterRevoke).toMatchObject({ created: 0, voided: 0, reactivated: 0 });
   });
 
   it("la restricción de base impide un date_only con hora inventada y una source_key repetida", async () => {

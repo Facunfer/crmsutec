@@ -380,17 +380,52 @@ export interface MeetingInvitationEventsTable {
   responded_at_precision: "exact_datetime" | "date_only" | null;
 }
 
+/** Cómo se registró la asistencia. Los 4 últimos son el vocabulario ANTERIOR a B3 (deprecado, solo por compatibilidad). */
+export type AttendanceMethod = "qr" | "invitation_link" | "manual" | "invitation_token" | "dni" | "email" | "phone";
+/** Con qué se identificó la persona (NULL en lo manual). */
+export type AttendanceIdentification = "dni" | "email" | "phone" | "invitation_token";
+export type AttendancePrecision = "exact_datetime" | "date_only" | "unknown";
+export type AttendanceEventType = "checked_in" | "revoked" | "restored" | "corrected";
+
+/** Fuente CANÓNICA de asistencia real. Vigente ⇔ revoked_at IS NULL. Nunca se borra. */
 export interface MeetingAttendanceTable {
   id: Generated<string>;
   meeting_id: string;
   person_id: string;
   invitation_id: string | null;
-  method: "invitation_token" | "dni" | "email" | "phone" | "manual";
-  checked_in_at: Generated<Date>;
+  method: AttendanceMethod;
+  /** CUÁNDO ocurrió (ver occurred_precision). NULL solo con precisión `unknown` (carga manual). */
+  checked_in_at: Date | null;
   ip_address: string | null;
   user_agent: string | null;
   registered_by: string | null;
+  /** Motivo de la CARGA MANUAL (obligatorio si method = manual). El motivo de revocación es revoke_reason. */
   correction_reason: string | null;
+  // 0039
+  identification: AttendanceIdentification | null;
+  /** Cuándo guardó el CRM la asistencia. */
+  recorded_at: Generated<Date>;
+  occurred_precision: Generated<AttendancePrecision>;
+  revoked_at: Date | null;
+  revoked_by: string | null;
+  revoke_reason: string | null;
+}
+
+/** 0040 — historial append-only de asistencia. `meeting_attendance` es el estado actual. */
+export interface MeetingAttendanceEventsTable {
+  id: Generated<string>;
+  seq: Generated<string>;
+  attendance_id: string;
+  meeting_id: string;
+  person_id: string;
+  event_type: AttendanceEventType;
+  occurred_at: Generated<Date>;
+  recorded_by: string | null;
+  attendance_method: AttendanceMethod | null;
+  identification: AttendanceIdentification | null;
+  reason: string | null;
+  checked_in_at: Date | null;
+  occurred_precision: AttendancePrecision | null;
 }
 
 export type FormStatus = "draft" | "published" | "unpublished" | "archived";
@@ -772,6 +807,7 @@ export interface Database {
   meeting_invitations: MeetingInvitationsTable;
   meeting_invitation_events: MeetingInvitationEventsTable;
   meeting_attendance: MeetingAttendanceTable;
+  meeting_attendance_events: MeetingAttendanceEventsTable;
   forms: FormsTable;
   form_versions: FormVersionsTable;
   form_fields: FormFieldsTable;

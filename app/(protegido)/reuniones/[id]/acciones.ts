@@ -6,7 +6,15 @@ import { countAudience, type MeetingAudienceSpec } from "@/lib/meetings/audience
 import { createInvitationBatch, MeetingInvitationError, recordInvitationResponse, withdrawInvitation, type CreateInvitationBatchResult, type StaffResponseDate } from "@/lib/meetings/invitations";
 import { searchAnyActivePeople } from "@/lib/associations/queries";
 import { regenerateQrSecret, MeetingCommandError } from "@/lib/meetings/commands";
-import { setAttendanceManually, ManualAttendanceError } from "@/lib/attendance/manual";
+import {
+  correctAttendance,
+  listAttendanceEvents,
+  ManualAttendanceError,
+  registerAttendanceManually,
+  restoreAttendance,
+  revokeAttendance,
+  type AttendanceOccurred,
+} from "@/lib/attendance/manual";
 
 export interface SimpleResult {
   ok: boolean;
@@ -89,19 +97,85 @@ export async function regenerateQrSecretAction(meetingId: string): Promise<Simpl
   }
 }
 
-export async function setAttendanceManuallyAction(
-  meetingId: string,
-  personId: string,
-  attendanceStatus: "attended" | "absent",
-  reason: string
-): Promise<SimpleResult> {
-  const actor = await requireUser();
+/** Cuándo ocurrió la asistencia, tal como lo elige el operador (hora de Buenos Aires; Argentina no tiene horario de verano). */
+export interface AttendanceWhenInput {
+  mode: "now" | "date_only" | "exact" | "unknown";
+  day?: string;
+  time?: string;
+}
+
+function toOccurred(when: AttendanceWhenInput): AttendanceOccurred {
+  if (when.mode === "now") return { kind: "now" };
+  if (when.mode === "unknown") return { kind: "unknown" };
+  if (when.mode === "date_only") return { kind: "date_only", day: when.day ?? "" };
+  return { kind: "exact", at: new Date(`${when.day ?? ""}T${when.time || "00:00"}:00-03:00`) };
+}
+
+async function run(meetingId: string, work: () => Promise<{ changed: boolean }>): Promise<SimpleResult & { changed?: boolean }> {
   try {
-    await setAttendanceManually(actor, meetingId, personId, attendanceStatus, reason);
+    const result = await work();
     revalidatePath(`/reuniones/${meetingId}`);
     revalidatePath(`/reuniones/${meetingId}/asistencia`);
-    return { ok: true };
+    return { ok: true, changed: result.changed };
   } catch (err) {
-    return { ok: false, error: err instanceof ManualAttendanceError ? err.message : "No se pudo corregir la asistencia." };
+    return { ok: false, error: err instanceof ManualAttendanceError ? err.message : "No se pudo completar la acción." };
+  }
+}
+
+/** Registrar a mano la asistencia (con o sin invitación). Motivo obligatorio; en una reunión finalizada hay que indicar cuándo ocurrió. */
+export async function registerAttendanceAction(meetingId: string, personId: string, input: { reason: string; when: AttendanceWhenInput }) {
+  const actor = await requireUser();
+  return run(meetingId, () => registerAttendanceManually(actor, { meetingId, personId, reason: input.reason, occurred: toOccurred(input.when) }));
+}
+
+/** Revocar (undo auditable): la asistencia deja de contar; nunca se borra. Motivo obligatorio. */
+export async function revokeAttendanceAction(meetingId: string, personId: string, reason: string) {
+  const actor = await requireUser();
+  return run(meetingId, () => revokeAttendance(actor, { meetingId, personId, reason }));
+}
+
+/** Restaurar una asistencia revocada (acto administrativo). Motivo obligatorio. */
+export async function restoreAttendanceAction(meetingId: string, personId: string, reason: string) {
+  const actor = await requireUser();
+  return run(meetingId, () => restoreAttendance(actor, { meetingId, personId, reason }));
+}
+
+/** Corregir SOLO la hora/precisión de una asistencia manual. Motivo obligatorio. */
+export async function correctAttendanceAction(meetingId: string, personId: string, input: { reason: string; when: Exclude<AttendanceWhenInput, { mode: "now" }> }) {
+  const actor = await requireUser();
+  return run(meetingId, () => correctAttendance(actor, { meetingId, personId, reason: input.reason, occurred: toOccurred(input.when) as Exclude<AttendanceOccurred, { kind: "now" }> }));
+}
+
+export interface AttendanceHistoryItem {
+  eventType: string;
+  occurredAt: string;
+  recordedBy: string;
+  method: string | null;
+  identification: string | null;
+  reason: string | null;
+  checkedInAt: string | null;
+  precision: string | null;
+}
+
+/** Historial de la asistencia de una persona (solo con permiso, acceso a la reunión y persona en alcance). */
+export async function listAttendanceHistoryAction(meetingId: string, personId: string): Promise<{ ok: true; events: AttendanceHistoryItem[] } | { ok: false; error: string }> {
+  const actor = await requireUser();
+  try {
+    const events = await listAttendanceEvents(actor, meetingId, personId);
+    return {
+      ok: true,
+      events: events.map((e) => ({
+        eventType: e.eventType,
+        occurredAt: e.occurredAt.toISOString(),
+        recordedBy: e.recordedByPerson ? "la propia persona" : (e.recordedByName ?? "un operador"),
+        method: e.attendanceMethod,
+        identification: e.identification,
+        reason: e.reason,
+        checkedInAt: e.checkedInAt ? e.checkedInAt.toISOString() : null,
+        precision: e.occurredPrecision,
+      })),
+    };
+  } catch {
+    return { ok: false, error: "No se pudo leer el historial." };
   }
 }

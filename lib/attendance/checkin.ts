@@ -1,11 +1,11 @@
 import { sql } from "kysely";
 import { getDb } from "../db/client.js";
-import { syncParticipationInteractions } from "../interactions/participation-sync.js";
 import { assertServerOnly } from "../server-only.js";
 import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
 import { normalizeDni, normalizeEmail, normalizePhone } from "../people/normalize.js";
 import { isQrWithinWindow, verifyQrSignature, DEFAULT_ROTATION_SECONDS } from "./qr.js";
-import { signPendingCheckin, verifyPendingCheckin } from "./session-tokens.js";
+import { signPendingCheckin, verifyPendingCheckin, type PendingIdentification } from "./session-tokens.js";
+import { insertAttendanceEvents } from "./events.js";
 
 assertServerOnly("lib/attendance/checkin.ts");
 
@@ -16,6 +16,10 @@ export type QrResolution =
   | { kind: "cancelled" }
   | { kind: "not_active" }
   | { kind: "rate_limited" };
+
+/** Estados en los que el check-in PÚBLICO (QR / enlace) puede abrirse: una reunión en borrador, finalizada o cancelada no lo admite
+ * (una finalizada solo recibe asistencia retroactiva por una acción manual autorizada y auditable). */
+const PUBLIC_CHECKIN_STATUSES = new Set(["scheduled", "in_progress"]);
 
 /** Primer paso: validar el QR escaneado y decidir si abrir una sesión de check-in. */
 export async function resolveQrToken(token: string, ip: string): Promise<QrResolution> {
@@ -35,6 +39,7 @@ export async function resolveQrToken(token: string, ip: string): Promise<QrResol
     return { kind: "invalid" };
   }
   if (meeting.status === "cancelled") return { kind: "cancelled" };
+  if (!PUBLIC_CHECKIN_STATUSES.has(meeting.status)) return { kind: "not_active" };
 
   // Una actividad importada sin fecha/hora no admite check-in.
   if (!meeting.starts_at || !meeting.ends_at) return { kind: "not_active" };
@@ -57,6 +62,8 @@ export async function getCheckinMeetingName(meetingId: string): Promise<string |
 export type IdentifyResult =
   | { kind: "need_confirmation"; firstName: string; confirmToken: string }
   | { kind: "already_checked_in"; firstName: string; checkedInAt: Date }
+  /** Ya existe una asistencia pero fue revocada por la organización: el check-in público NUNCA la restaura. */
+  | { kind: "already_processed" }
   | { kind: "not_found" }
   | { kind: "rate_limited" };
 
@@ -126,13 +133,13 @@ export async function identifyForCheckin(
   const db = await getDb();
   const meeting = await db
     .selectFrom("meetings")
-    .select(["id", "owner_organization_id", "allow_uninvited_checkin"])
+    .select(["id", "owner_organization_id", "allow_uninvited_checkin", "status"])
     .where("id", "=", meetingId)
     .executeTakeFirst();
-  if (!meeting) return fail();
+  if (!meeting || !PUBLIC_CHECKIN_STATUSES.has(meeting.status)) return fail();
 
   const eligible = eligibleForMeeting(meeting);
-  const candidates: Array<{ id: string; first_name: string; last_name: string }> = [];
+  const candidates: Array<{ id: string; first_name: string; last_name: string; via: PendingIdentification }> = [];
 
   if (dni) {
     candidates.push(
@@ -142,7 +149,7 @@ export async function identifyForCheckin(
         .where("dni", "=", dni)
         .where("status", "=", "active")
         .where(eligible)
-        .execute())
+        .execute()).map((c) => ({ ...c, via: "dni" as const }))
     );
   }
   if (email) {
@@ -153,7 +160,7 @@ export async function identifyForCheckin(
         .where(({ fn }) => fn("lower", ["email"]), "=", email)
         .where("status", "=", "active")
         .where(eligible)
-        .execute())
+        .execute()).map((c) => ({ ...c, via: "email" as const }))
     );
   }
   if (phone) {
@@ -164,7 +171,7 @@ export async function identifyForCheckin(
         .where("phone", "=", phone)
         .where("status", "=", "active")
         .where(eligible)
-        .execute())
+        .execute()).map((c) => ({ ...c, via: "phone" as const }))
     );
   }
 
@@ -174,27 +181,29 @@ export async function identifyForCheckin(
 
   const existingAttendance = await db
     .selectFrom("meeting_attendance")
-    .select(["checked_in_at"])
+    .select(["checked_in_at", "recorded_at", "revoked_at"])
     .where("meeting_id", "=", meetingId)
     .where("person_id", "=", person.id)
     .executeTakeFirst();
 
   await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, true);
 
+  if (existingAttendance?.revoked_at) return { kind: "already_processed" };
   if (existingAttendance) {
-    return { kind: "already_checked_in", firstName: person.first_name, checkedInAt: existingAttendance.checked_in_at };
+    return { kind: "already_checked_in", firstName: person.first_name, checkedInAt: existingAttendance.checked_in_at ?? existingAttendance.recorded_at };
   }
 
   return {
     kind: "need_confirmation",
     firstName: person.first_name,
-    confirmToken: signPendingCheckin(meetingId, person.id),
+    confirmToken: signPendingCheckin(meetingId, person.id, person.via),
   };
 }
 
 export type ConfirmResult =
   | { kind: "ok"; firstName: string; checkedInAt: Date }
   | { kind: "already_checked_in"; firstName: string; checkedInAt: Date }
+  | { kind: "already_processed" }
   | { kind: "invalid" }
   | { kind: "not_active" }
   | { kind: "rate_limited" };
@@ -206,7 +215,8 @@ export async function confirmCheckin(confirmToken: string, ip: string, userAgent
   const rate = await checkPublicLinkRateLimit("checkin_confirm", `${pending.m}:${ip}`, ip, { perIdentifierLimit: 60, perIpLimit: 300 });
   if (!rate.allowed) return { kind: "rate_limited" };
 
-  return recordCheckIn(pending.m, pending.p, "dni", { ip, userAgent });
+  // Medio = QR; identificación = la que usó la persona (los tokens anteriores a B3 no la traían: se asume DNI).
+  return recordCheckIn(pending.m, pending.p, "qr", pending.i ?? "dni", { ip, userAgent });
 }
 
 /** Prioridad 1 de identificación: ya sabemos quién es por su invitación personal. */
@@ -216,46 +226,37 @@ export async function checkInWithInvitationToken(
   ip: string,
   userAgent: string | undefined
 ): Promise<ConfirmResult> {
-  return recordCheckIn(meetingId, personId, "invitation_token", { ip, userAgent });
+  return recordCheckIn(meetingId, personId, "invitation_link", "invitation_token", { ip, userAgent });
 }
 
-type AttendanceMethod = "invitation_token" | "dni" | "email" | "phone" | "manual";
-
 /**
- * Única ruta de escritura de check-in (sección 12.2): tanto la
- * confirmación por QR como el check-in vía enlace de invitación pasan
- * por acá. `unique(meeting_id, person_id)` en la base es el resguardo
- * final contra duplicados si dos pestañas confirman a la vez.
+ * Única ruta de escritura del check-in PÚBLICO: la confirmación por QR y el enlace de invitación pasan por acá. Una sola
+ * transacción: `INSERT … ON CONFLICT (meeting_id, person_id) DO NOTHING` + evento `checked_in`. Dos escaneos simultáneos o un
+ * reintento dejan UNA fila y UN evento; el que pierde la carrera informa la fila existente. Si la asistencia existente fue
+ * REVOCADA, no se restaura (eso es una acción administrativa) y no se registra nada. No toca `meeting_invitations` ni crea
+ * interacciones (asistencia ≠ contacto).
  */
 async function recordCheckIn(
   meetingId: string,
   personId: string,
-  method: AttendanceMethod,
+  method: "qr" | "invitation_link",
+  identification: "dni" | "email" | "phone" | "invitation_token",
   meta: { ip: string; userAgent?: string }
 ): Promise<ConfirmResult> {
   const db = await getDb();
 
   const meeting = await db.selectFrom("meetings").selectAll().where("id", "=", meetingId).executeTakeFirst();
   if (!meeting || meeting.status === "cancelled") return { kind: "invalid" };
+  if (!PUBLIC_CHECKIN_STATUSES.has(meeting.status)) return { kind: "not_active" };
 
   if (!meeting.starts_at || !meeting.ends_at) return { kind: "not_active" };
-  const now = Date.now();
+  const nowMs = Date.now();
   const from = meeting.starts_at.getTime() - meeting.checkin_tolerance_before_minutes * 60_000;
   const to = meeting.ends_at.getTime() + meeting.checkin_tolerance_after_minutes * 60_000;
-  if (now < from || now > to) return { kind: "not_active" };
+  if (nowMs < from || nowMs > to) return { kind: "not_active" };
 
   const person = await db.selectFrom("people").select(["id", "first_name"]).where("id", "=", personId).executeTakeFirst();
   if (!person) return { kind: "invalid" };
-
-  const existing = await db
-    .selectFrom("meeting_attendance")
-    .select(["checked_in_at"])
-    .where("meeting_id", "=", meetingId)
-    .where("person_id", "=", personId)
-    .executeTakeFirst();
-  if (existing) {
-    return { kind: "already_checked_in", firstName: person.first_name, checkedInAt: existing.checked_in_at };
-  }
 
   const invitation = await db
     .selectFrom("meeting_invitations")
@@ -265,63 +266,52 @@ async function recordCheckIn(
     .where("withdrawn_at", "is", null)
     .executeTakeFirst();
 
-  // Defensa en profundidad: aunque el token de confirmación se emite después de
-  // identificar, registrar exige que la persona sea válida para ESTA reunión.
+  // Defensa en profundidad: aunque el token de confirmación se emite después de identificar, registrar exige que la persona sea
+  // válida para ESTA reunión.
   if (!invitation) {
-    const eligible = await db
-      .selectFrom("people")
-      .select("id")
-      .where("id", "=", personId)
-      .where(eligibleForMeeting(meeting))
-      .executeTakeFirst();
+    const eligible = await db.selectFrom("people").select("id").where("id", "=", personId).where(eligibleForMeeting(meeting)).executeTakeFirst();
     if (!eligible) return { kind: "invalid" };
   }
 
-  const checkedInAt = new Date();
+  return db.transaction().execute(async (trx): Promise<ConfirmResult> => {
+    const now = new Date(); // hora real del servidor: coincide con recorded_at
+    const inserted = await trx
+      .insertInto("meeting_attendance")
+      .values({
+        meeting_id: meetingId,
+        person_id: personId,
+        invitation_id: invitation?.id ?? null,
+        method,
+        identification,
+        checked_in_at: now,
+        occurred_precision: "exact_datetime",
+        recorded_at: now,
+        ip_address: meta.ip,
+        user_agent: meta.userAgent ?? null,
+      })
+      .onConflict((oc) => oc.columns(["meeting_id", "person_id"]).doNothing())
+      .returning("id")
+      .executeTakeFirst();
 
-  try {
-    await db.transaction().execute(async (trx) => {
-      await trx
-        .insertInto("meeting_attendance")
-        .values({
-          meeting_id: meetingId,
-          person_id: personId,
-          invitation_id: invitation?.id ?? null,
-          method,
-          checked_in_at: checkedInAt,
-          ip_address: meta.ip,
-          user_agent: meta.userAgent ?? null,
-        })
-        .execute();
+    if (inserted) {
+      await insertAttendanceEvents(trx, [
+        {
+          attendance_id: inserted.id, meeting_id: meetingId, person_id: personId, event_type: "checked_in", occurred_at: now, recorded_by: null,
+          attendance_method: method, identification, checked_in_at: now, occurred_precision: "exact_datetime",
+        },
+      ]);
+      return { kind: "ok", firstName: person.first_name, checkedInAt: now };
+    }
 
-      if (invitation) {
-        await trx
-          .updateTable("meeting_invitations")
-          .set({ attendance_status: "attended" })
-          .where("id", "=", invitation.id)
-          .execute();
-      }
-    });
-  } catch {
-    // Concurrencia real (sección 12.3): dos check-ins casi simultáneos de
-    // la misma persona chocan contra el UNIQUE(meeting_id, person_id) — el
-    // segundo no crea una fila nueva, solo informa la que ya existe.
-    const raceWinner = await db
+    // Otra solicitud (u otro medio) ganó la carrera, o es un reintento: se informa la fila existente, sin escribir.
+    const existing = await trx
       .selectFrom("meeting_attendance")
-      .select(["checked_in_at"])
+      .select(["checked_in_at", "recorded_at", "revoked_at"])
       .where("meeting_id", "=", meetingId)
       .where("person_id", "=", personId)
       .executeTakeFirst();
-    if (raceWinner) {
-      return { kind: "already_checked_in", firstName: person.first_name, checkedInAt: raceWinner.checked_in_at };
-    }
-    throw new Error("No se pudo registrar el check-in.");
-  }
-
-  // La asistencia real genera la interacción de la persona (idempotente). Si falla, el check-in ya quedó registrado y
-  // se regenera en la próxima sincronización: no se le rompe el ingreso a quien acaba de hacerlo.
-  await syncParticipationInteractions(db, { meetingId, personId }).catch(() => undefined);
-
-
-  return { kind: "ok", firstName: person.first_name, checkedInAt };
+    if (!existing) throw new Error("No se pudo registrar el check-in.");
+    if (existing.revoked_at) return { kind: "already_processed" };
+    return { kind: "already_checked_in", firstName: person.first_name, checkedInAt: existing.checked_in_at ?? existing.recorded_at };
+  });
 }

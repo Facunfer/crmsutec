@@ -605,8 +605,8 @@ describe("B2 · B1 y datos ajenos intactos", () => {
 
   it("defensa adicional (no es garantía de integridad): solo los comandos del módulo de invitaciones escriben meeting_invitations", () => {
     const allowedFull = new Set(["lib/meetings/invitations.ts", "lib/meetings/public.ts"]);
-    // Escritores LEGACY del campo deprecado attendance_status (B3 los reemplaza): solo pueden tocar ese campo.
-    const legacyAttendanceOnly = new Set(["lib/meetings/commands.ts", "lib/attendance/manual.ts", "lib/attendance/checkin.ts"]);
+    // Desde B3 nadie más escribe meeting_invitations (los escritores heredados de attendance_status se retiraron).
+    const legacyAttendanceOnly = new Set<string>();
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {

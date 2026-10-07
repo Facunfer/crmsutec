@@ -363,7 +363,7 @@ describe("check-in público: la identificación queda acotada a la reunión", ()
   });
 
   it("un token de confirmación armado para una persona no válida no registra nada", async () => {
-    const forged = signPendingCheckin(id("mOpen"), id("pB"));
+    const forged = signPendingCheckin(id("mOpen"), id("pB"), "dni");
     expect(await confirmCheckin(forged, nextIp(), "test")).toEqual({ kind: "invalid" });
     expect(await attendanceCount("mOpen", "pB")).toBe(0);
   });
@@ -455,13 +455,14 @@ describe("historial de reuniones de una persona trasladada", () => {
     // así que el traslado lo hace Master Global, como corresponde ahora entre áreas sin alcance compartido).
     await transferPerson(master, id("pHist"), o("B"), "Cambio de destino");
 
-    // B2 (decisión aprobada): la lista de INVITACIONES filtra por personas dentro del alcance de quien mira. Al trasladarse
-    // fuera del alcance de A, su invitación deja de listarse para A (antes seguía visible por nombre). El panel en vivo y la
-    // asistencia no cambian: conservan el nombre en el historial de la reunión.
+    // B2/B3 (decisión aprobada): invitaciones, panel en vivo y asistencia filtran por personas dentro del alcance ACTUAL de quien
+    // mira. Al trasladarse fuera del alcance de A, ni su invitación ni su asistencia se exponen a A. Master conserva la vista global.
     const invitations = await invitationsLib.listInvitations(adminA, id("mOpen"));
     expect(invitations.find((i) => i.personId === id("pHist"))).toBeUndefined();
     const panel = await getLivePanelData(adminA, id("mOpen"));
-    expect(panel!.arrived.map((p) => p.firstName)).toContain("Historica");
+    expect(panel!.arrived.map((p) => p.firstName)).not.toContain("Historica");
+    expect(JSON.stringify(panel)).not.toContain("Historica");
+    expect((await getLivePanelData(master, id("mOpen")))!.arrived.map((p) => p.firstName)).toContain("Historica");
 
     // ...pero no se filtran datos actuales de la persona.
     const exposed = JSON.stringify({ invitations, panel });

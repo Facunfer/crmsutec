@@ -67,14 +67,18 @@ export function verifyCheckinSession(token: string): CheckinSessionPayload | nul
 
 const PENDING_CHECKIN_TTL_MS = 2 * 60_000;
 
+export type PendingIdentification = "dni" | "email" | "phone";
+
 export interface PendingCheckinPayload {
   m: string; // meetingId
   p: string; // personId
+  /** Con qué se identificó la persona (dni | email | phone). Tokens emitidos antes de B3 no lo traen. */
+  i?: PendingIdentification;
   exp: number;
 }
 
-export function signPendingCheckin(meetingId: string, personId: string): string {
-  return sign({ m: meetingId, p: personId, exp: Date.now() + PENDING_CHECKIN_TTL_MS });
+export function signPendingCheckin(meetingId: string, personId: string, identification: PendingIdentification): string {
+  return sign({ m: meetingId, p: personId, i: identification, exp: Date.now() + PENDING_CHECKIN_TTL_MS });
 }
 
 export function verifyPendingCheckin(token: string): PendingCheckinPayload | null {

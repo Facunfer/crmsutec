@@ -35,7 +35,7 @@ const meetingCommands = await import("../../lib/meetings/commands.js");
 const invitations = await import("../../lib/meetings/invitations.js");
 const { countAudience } = await import("../../lib/meetings/audience.js");
 const { getLivePanelData, quickSearchForAccreditation } = await import("../../lib/attendance/live.js");
-const { setAttendanceManually } = await import("../../lib/attendance/manual.js");
+const { registerAttendanceManually } = await import("../../lib/attendance/manual.js");
 const forms = await import("../../lib/forms/queries.js");
 const formCommands = await import("../../lib/forms/commands.js");
 const { exportSubmissionsCsv } = await import("../../lib/forms/export.js");
@@ -350,7 +350,7 @@ describe("reuniones: alcance por unidad propietaria", () => {
     await expect(meetingCommands.regenerateQrSecret(adminA, id("mB1"))).rejects.toThrow(/no existe/);
     await expect(meetingCommands.setMeetingAssociations(adminA, id("mB1"), [])).rejects.toThrow(/no existe/);
     await expect(invitations.createInvitationBatch(adminA, id("mB1"), { personIds: [id("pA")] })).rejects.toThrow(/no existe/);
-    await expect(setAttendanceManually(adminA, id("mB1"), id("pA"), "attended", "motivo")).rejects.toThrow(/no existe/);
+    await expect(registerAttendanceManually(adminA, { meetingId: id("mB1"), personId: id("pA"), reason: "motivo", occurred: { kind: "now" } })).rejects.toThrow(/no existe/);
     await expect(
       meetingCommands.updateMeeting(adminA, id("mB1"), { name: "x", startsAt: "2030-01-01T10:00", endsAt: "2030-01-01T11:00" } as any)
     ).rejects.toThrow(/no existe/);

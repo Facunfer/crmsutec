@@ -50,6 +50,7 @@ export async function checkinAction(token: string, _prevState: CheckinState): Pr
   const messages: Record<string, string> = {
     invalid: "Este enlace no es válido.",
     not_active: "La acreditación para esta reunión no está abierta en este momento.",
+    already_processed: "Tu asistencia ya fue procesada por la organización. Si tenés dudas, acercate a la mesa de acreditación.",
     rate_limited: "Demasiados intentos. Probá de nuevo en unos minutos.",
   };
   return { status: "error", message: messages[result.reason] ?? "No se pudo registrar tu llegada." };

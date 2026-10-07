@@ -62,9 +62,12 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   ]);
   const areas = await listAreaOptions(actor, orgTree);
 
-  const attendedCount = meetingActivity.filter((m) => m.invited && m.attendanceStatus === "attended").length;
-  const finishedInvitations = meetingActivity.filter((m) => m.invited && ["attended", "absent"].includes(m.attendanceStatus)).length;
-  const attendanceRate = finishedInvitations > 0 ? Math.round((attendedCount / finishedInvitations) * 100) : null;
+  // Provisional (el rediseño integral es B5). Denominador EXPLÍCITO: invitaciones vigentes a reuniones FINALIZADAS. Numerador:
+  // las que tienen asistencia VIGENTE (una revocada no cuenta). No se habla de «ausentes»: la falta de check-in no es una ausencia
+  // comprobada, y las actividades históricas sin invitaciones no entran en el cálculo.
+  const invitedFinished = meetingActivity.filter((m) => m.invited && m.meetingStatus === "finished");
+  const attendedCount = invitedFinished.filter((m) => m.attended).length;
+  const finishedInvitations = invitedFinished.length;
 
   const initialValues: PersonFormInitialValues = {
     firstName: person.firstName,
@@ -169,7 +172,11 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
         <div className="mb-3 flex gap-6 text-sm text-brand-700">
           <span>{meetingActivity.length} actividad(es)</span>
           <span>{formSubmissions.length} formulario(s) completados</span>
-          {attendanceRate !== null ? <span>{attendanceRate}% de asistencia</span> : null}
+          {finishedInvitations > 0 ? (
+            <span title="Cuenta solo las invitaciones vigentes a reuniones finalizadas; no implica que quienes no figuran hayan estado ausentes.">
+              Asistió a {attendedCount} de {finishedInvitations} invitaciones a reuniones finalizadas
+            </span>
+          ) : null}
         </div>
 
         {meetingActivity.length > 0 ? (

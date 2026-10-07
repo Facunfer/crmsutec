@@ -19,7 +19,7 @@ async function getSessionMeetingId(): Promise<string | null> {
 }
 
 export interface IdentifyState {
-  kind: "idle" | "need_confirmation" | "already_checked_in" | "not_found" | "rate_limited" | "no_session";
+  kind: "idle" | "need_confirmation" | "already_checked_in" | "already_processed" | "not_found" | "rate_limited" | "no_session";
   firstName?: string;
   confirmToken?: string;
   checkedInAt?: string;
@@ -45,7 +45,7 @@ export async function identifyAction(_prevState: IdentifyState, formData: FormDa
 }
 
 export interface ConfirmState {
-  kind: "idle" | "ok" | "already_checked_in" | "invalid" | "not_active" | "rate_limited";
+  kind: "idle" | "ok" | "already_checked_in" | "already_processed" | "invalid" | "not_active" | "rate_limited";
   firstName?: string;
   checkedInAt?: string;
 }

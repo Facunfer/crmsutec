@@ -20,7 +20,7 @@ const { signRotatingQrToken } = await import("../../lib/attendance/qr.js");
 const { resolveQrToken, identifyForCheckin, confirmCheckin, checkInWithInvitationToken } = await import(
   "../../lib/attendance/checkin.js"
 );
-const { setAttendanceManually, ManualAttendanceError } = await import("../../lib/attendance/manual.js");
+const { registerAttendanceManually, revokeAttendance, ManualAttendanceError } = await import("../../lib/attendance/manual.js");
 
 const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
 const ALL_PERMISSIONS = new Set(PERMISSIONS.map((p) => p.key));
@@ -130,10 +130,10 @@ describe("flujo completo QR -> identificación -> confirmación", () => {
     const db = await getDb();
     const rows = await db.selectFrom("meeting_attendance").selectAll().where("meeting_id", "=", id).where("person_id", "=", personId).execute();
     expect(rows.length).toBe(1);
-    expect(rows[0]?.method).toBe("dni");
-
+    // B3: el MEDIO queda registrado (qr) separado de la identificación usada (dni); attendance_status ya no se escribe.
+    expect(rows[0]).toMatchObject({ method: "qr", identification: "dni", occurred_precision: "exact_datetime", revoked_at: null });
     const [invitation] = await db.selectFrom("meeting_invitations").select("attendance_status").where("meeting_id", "=", id).where("person_id", "=", personId).execute();
-    expect(invitation?.attendance_status).toBe("attended");
+    expect(invitation?.attendance_status).toBe("unknown");
   });
 
   it("regenerar el secreto QR invalida los códigos ya emitidos", async () => {
@@ -175,7 +175,7 @@ describe("prioridad 1: check-in vía enlace personal de invitación", () => {
     const db = await getDb();
     const rows = await db.selectFrom("meeting_attendance").selectAll().where("meeting_id", "=", id).where("person_id", "=", personId).execute();
     expect(rows.length).toBe(1);
-    expect(rows[0]?.method).toBe("invitation_token");
+    expect(rows[0]).toMatchObject({ method: "invitation_link", identification: "invitation_token" });
   });
 
   it("un token retirado/inválido no registra nada", async () => {
@@ -238,50 +238,37 @@ describe("rate limiting en identificación pública", () => {
   }, 30_000);
 });
 
-describe("corrección manual de asistencia", () => {
-  it("exige un motivo, y nunca pisa un check-in por QR ya existente", async () => {
+describe("acciones manuales de asistencia (B3)", () => {
+  it("exige un motivo, y nunca pisa un check-in por QR ya existente (el manual sobre vigente es no-op)", async () => {
     const { id } = await makeInProgressMeeting("Reunión Manual");
     const personId = await makePerson("Franco", "Paz", "30111777");
     await createInvitationBatch(actor, id, { personIds: [personId] });
 
-    await expect(setAttendanceManually(actor, id, personId, "attended", "")).rejects.toThrow(ManualAttendanceError);
+    await expect(registerAttendanceManually(actor, { meetingId: id, personId, reason: "", occurred: { kind: "now" } })).rejects.toThrow(ManualAttendanceError);
 
     await checkInWithInvitationToken(id, personId, nextIp(), "qr-agent");
     const db = await getDb();
-    const [beforeRow] = await db
-      .selectFrom("meeting_attendance")
-      .select(["method", "checked_in_at"])
-      .where("meeting_id", "=", id)
-      .where("person_id", "=", personId)
-      .execute();
-    expect(beforeRow?.method).toBe("invitation_token");
+    const read = () => db.selectFrom("meeting_attendance").select(["method", "checked_in_at", "revoked_at"]).where("meeting_id", "=", id).where("person_id", "=", personId).execute();
+    const before = await read();
+    expect(before[0]?.method).toBe("invitation_link");
 
-    await setAttendanceManually(actor, id, personId, "absent", "Se retiró antes, dato corregido a mano");
+    expect(await registerAttendanceManually(actor, { meetingId: id, personId, reason: "ya estaba", occurred: { kind: "now" } })).toEqual({ changed: false });
+    const after = await read();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.method).toBe("invitation_link"); // el hecho original del check-in no se pisa
 
-    const rowsAfter = await db
-      .selectFrom("meeting_attendance")
-      .select(["method", "checked_in_at"])
-      .where("meeting_id", "=", id)
-      .where("person_id", "=", personId)
-      .execute();
-    expect(rowsAfter.length).toBe(1);
-    expect(rowsAfter[0]?.method).toBe("invitation_token"); // el hecho histórico del QR no se borra
-
-    const [invitation] = await db
-      .selectFrom("meeting_invitations")
-      .select("attendance_status")
-      .where("meeting_id", "=", id)
-      .where("person_id", "=", personId)
-      .execute();
-    expect(invitation?.attendance_status).toBe("absent"); // el resumen sí refleja la corrección
+    await revokeAttendance(actor, { meetingId: id, personId, reason: "Se retiró antes, dato corregido a mano" });
+    const revoked = await read();
+    expect(revoked).toHaveLength(1); // la fila NO se borra
+    expect(revoked[0]?.revoked_at).not.toBeNull();
   });
 
-  it("una persona sin permiso no puede corregir asistencia", async () => {
+  it("una persona sin permiso no puede registrar asistencia", async () => {
     const { id } = await makeInProgressMeeting("Reunión Manual Sin Permiso");
     const personId = await makePerson("Gina", "Soto", "30111888");
     await createInvitationBatch(actor, id, { personIds: [personId] });
 
     const noPermActor = { ...actor, permissions: new Set<string>() };
-    await expect(setAttendanceManually(noPermActor, id, personId, "attended", "motivo cualquiera")).rejects.toThrow();
+    await expect(registerAttendanceManually(noPermActor, { meetingId: id, personId, reason: "motivo cualquiera", occurred: { kind: "now" } })).rejects.toThrow();
   });
 });

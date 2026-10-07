@@ -146,7 +146,7 @@ export function meetingVisibility(user: SessionUser, meetingIdColumn = "meetings
     or exists (
       select 1 from meeting_attendance ma
       join people pa on pa.id = ma.person_id
-      where ma.meeting_id = ${sql.ref(meetingIdColumn)} and pa.organization_id in (${acc})
+      where ma.meeting_id = ${sql.ref(meetingIdColumn)} and ma.revoked_at is null and pa.organization_id in (${acc})
     )
     -- Participantes GENERALES de la campaña de la actividad (participación a nivel campaña, sin jornada probada): la
     -- reunión se ve para poder mostrarlos en «Sin jornada asignada». La campaña sale de meetings.campaign_id (0036).
@@ -198,4 +198,15 @@ export async function canViewMeeting(user: SessionUser, meetingId: string): Prom
 /** ¿Es un uuid bien formado? Evita que un id malformado llegue a un cast SQL y rompa con un error de base. */
 export function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+/** ¿Está la persona DENTRO del alcance del usuario? (misma regla que `personInScope`, para comandos que necesitan un booleano). */
+export async function isPersonInScope(
+  db: { executeQuery: unknown } | any,
+  user: SessionUser,
+  personId: string
+): Promise<boolean> {
+  if (!isUuid(personId)) return false;
+  const result = await sql<{ ok: boolean }>`select ${personInScope(user, "p.id")} as ok from people p where p.id = ${personId}::uuid`.execute(db);
+  return result.rows[0]?.ok === true;
 }

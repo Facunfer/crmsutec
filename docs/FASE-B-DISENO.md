@@ -104,9 +104,12 @@ asistencia usa `meetings.attendance_manual`, siempre con la persona dentro del a
   `date_only` = medianoche de Buenos Aires; nunca una fecha de respuesta posterior al registro).
 - **0038 (B2)** — `meeting_invitation_events`: historial append-only (eventos `invited`, `responded`, `response_changed`, `withdrawn`, `reinvited`),
   columnas relacionales, FK compuesta a la invitación, trigger append-only, RLS, SELECT/INSERT para la app.
-- **0039 (B3)** — `meeting_attendance`: método `qr`/`invitation_link`, `identification`, `recorded_at`, `occurred_precision`, `revoked_*`; guard actualizado;
-  índice por `person_id`; tabla `meeting_attendance_events` (solo inserción).
-- **0040 (B4)** — `meeting_participations`: `registered_at` (NULL en lo histórico), `recorded_by`, `origin_channel`, anulación `voided_*` solo para inscripciones `standard`.
+- **0039 (B3)** — `meeting_attendance`: `identification`, `recorded_at`, `occurred_precision` (`exact_datetime` / `date_only` / `unknown`, esta última solo en carga
+  manual y con `checked_in_at` NULL), revocación (`revoked_at/by`, `revoke_reason`), vocabularios (`method`: `qr` · `invitation_link` · `manual`; `identification`:
+  `dni` · `email` · `phone` · `invitation_token`; el CHECK de `method` conserva los valores anteriores por compatibilidad), `UNIQUE(id, meeting_id, person_id)`,
+  índice por `person_id` y guard reescrito (identidad inmutable; solo cambian la revocación y la hora de una asistencia manual).
+- **0040 (B3)** — `meeting_attendance_events`: historial append-only (`checked_in`, `revoked`, `restored`, `corrected`), `seq`, FK compuesta, RLS, SELECT/INSERT para la app.
+- **0041 (B4)** — `meeting_participations`: `registered_at` (NULL en lo histórico), `recorded_by`, `origin_channel`, anulación `voided_*` solo para inscripciones `standard`.
 - No se endurece el CHECK de `participation_kind` (los tipos sobrantes `invited/attended/absent/approved/unknown` quedan intactos).
 
 ### 7.1 B2 — invitación y respuesta (reglas)
@@ -134,12 +137,27 @@ La base impone combinaciones imposibles (0037) y que el historial sea append-onl
 que lo hagan (decisión: el contexto —canal, responsable— ya viene en los comandos). Un test sobre el código fuente es una defensa adicional, no una garantía.
 Los escritores heredados de `attendance_status` (`commands.ts`, `manual.ts`, `checkin.ts`) solo tocan ese campo deprecado y se reemplazan en B3.
 
+### 7.3 B3 — asistencia (reglas)
+
+- **Fuente canónica:** `meeting_attendance`; vigente ⇔ `revoked_at IS NULL`. Nunca se borra. `meeting_invitations.attendance_status` quedó DEPRECADO: no se lee ni se escribe
+  (0 usos runtime; la columna se retirará con una migración destructiva futura aprobada).
+- **Check-in público (QR / enlace):** solo en reuniones `scheduled` o `in_progress` dentro de la ventana; `INSERT … ON CONFLICT (meeting_id, person_id) DO NOTHING` + evento
+  `checked_in`; un reintento o una carrera dejan una fila y un evento. Sobre una asistencia **revocada** devuelve «ya procesada» y no la restaura.
+- **Asistencia manual** (permiso temporal `meetings.attendance_manual` + acceso a la reunión + persona en alcance + motivo): en reuniones `in_progress` o `finished`; sin invitación
+  previa (no se crea una artificial); en una reunión finalizada es una carga retroactiva y hay que indicar cuándo ocurrió (día y hora, solo el día o desconocida).
+- **Revocar / restaurar / corregir:** actos administrativos con usuario y motivo obligatorios, estado + evento en una transacción con la fila bloqueada. `corrected` solo cambia
+  la hora/precisión de una asistencia manual vigente.
+- **Interacciones:** la asistencia NO crea ni modifica interacciones (Opción B). Qué cuenta como «último contacto real» se define en B5.
+- **`finishMeeting`:** ya no crea ausencias. Falta de check-in = «Sin asistencia registrada» (actividad gestionada) o «Sin información» (histórico/importado). No existe el hecho «No asistió».
+- **Alcance estricto:** panel, búsquedas, carga manual, revocación, restauración, corrección e historial respetan el alcance ACTUAL de la persona. Master conserva la vista global.
+- **Invariante de integridad (aplicación):** ver `lib/attendance/events.ts`.
+
 ## 8. Subetapas (aprobación independiente para cada una)
 
 1. **B1** — lectura/UI/conteos: módulo común de métricas, chips de hechos, copy de procedencia, optimización de round trips. Sin migraciones ni escrituras.
 2. **B2** — metadata de invitación/respuesta e historial (0037 + 0038).
-3. **B3** — asistencia, undo real, auditoría y check-in (0039).
-4. **B4** — inscripción operativa (0040).
+3. **B3** — asistencia, undo real, auditoría y check-in (0039 + 0040).
+4. **B4** — inscripción operativa (0041).
 5. **B5** — timeline de Persona (actividad separada de contacto).
 6. **B6** — cierre, performance y producción.
 

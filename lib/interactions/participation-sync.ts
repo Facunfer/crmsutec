@@ -19,7 +19,7 @@ type Db = Kysely<Database> | Transaction<Database>;
  *     (migración 0028): decisión de negocio EXCLUSIVA de la carga histórica inicial de Gabriel — «inscripto» en esas
  *     fuentes se considera participación. Los importadores y el reconciliador restringen su uso por procedencia;
  *     el CHECK de 0028 valida la combinación de estado/base, no la procedencia. Ver legacy-reconciliation.ts;
- *   - meeting_attendance (check-in QR/DNI o registro manual) cuya invitación no fue corregida a «ausente».
+ *   (La asistencia — meeting_attendance — NO genera interacciones desde B3: ver el punto 2 del cuerpo de la función.)
  * Una INSCRIPCIÓN estándar (participation_basis='standard'), una invitación o una confirmación NO generan
  * interacción: no se reinterpretan como asistencia. Una participación de campaña sin jornada determinada (meeting_id
  * nulo) tampoco: el JOIN con `meetings` la excluye siempre, aunque sea 'participated'.
@@ -28,9 +28,7 @@ type Db = Kysely<Database> | Transaction<Database>;
  * de ese día en Buenos Aires, sin hora inventada). Actividades sin fecha (`unknown`) no generan interacción todavía:
  * se informan como omitidas y se generan cuando la actividad tenga fecha (la función es idempotente).
  *
- * Idempotencia: cada interacción lleva `source_key` = «meeting_participation:<id>» o «meeting_attendance:<id>» (UNIQUE):
- * reprocesar una reunión no duplica. Si un check-in se corrige a «ausente», su interacción se ANULA (voided, con motivo);
- * si se corrige de nuevo a «asistió», se reactiva.
+ * Idempotencia: cada interacción lleva `source_key` = «meeting_participation:<id>» (UNIQUE): reprocesar una reunión no duplica.
  *
  * Propietaria de la interacción (owner_organization_id): la unidad de la persona (así la ve su área) y, si la persona no
  * tiene unidad, la propietaria de la actividad. Autor (created_by): el actor; si no hay (check-in público), el
@@ -120,44 +118,8 @@ export async function syncParticipationInteractions(db: Db, scope: Participation
     return { created: fromParticipations.rows.length, reactivated: 0, voided: 0, skippedWithoutDate: Number(skipped.rows[0]?.n ?? 0) };
   }
 
-  // 2. Check-in real (QR / DNI / manual) que no fue corregido a «ausente».
-  const fromAttendance = await sql<{ id: string }>`
-    insert into person_interactions
-      (person_id, owner_organization_id, occurred_at, occurred_precision, interaction_type_id, subject, status, meeting_id, created_by, source_key)
-    select p.id, coalesce(p.organization_id, m.owner_organization_id), ma.checked_in_at, 'exact_datetime', ${typeId}::uuid, ${SUBJECT}, 'completed', m.id,
-           coalesce(${actor}::uuid, ma.registered_by, m.organizer_user_id, m.created_by), 'meeting_attendance:' || ma.id
-    from meeting_attendance ma
-    join meetings m on m.id = ma.meeting_id
-    join people p on p.id = ma.person_id
-    left join meeting_invitations mi on mi.id = ma.invitation_id
-    where coalesce(mi.attendance_status, 'attended') <> 'absent' ${meetingFilter} ${personFilter}
-      and coalesce(${actor}::uuid, ma.registered_by, m.organizer_user_id, m.created_by) is not null
-    on conflict (source_key) where source_key is not null do nothing
-    returning id
-  `.execute(db);
-
-  // 3. Correcciones: un check-in corregido a «ausente» anula su interacción; corregido de nuevo a «asistió», la reactiva.
-  const voided = await sql<{ id: string }>`
-    update person_interactions pi
-    set status = 'voided', void_reason = 'La asistencia fue corregida a ausente', updated_at = now(), version = pi.version + 1
-    from meeting_attendance ma
-    join meeting_invitations mi on mi.id = ma.invitation_id
-    join meetings m on m.id = ma.meeting_id
-    join people p on p.id = ma.person_id
-    where pi.source_key = 'meeting_attendance:' || ma.id and pi.status <> 'voided' and mi.attendance_status = 'absent' ${meetingFilter} ${personFilter}
-    returning pi.id
-  `.execute(db);
-  const reactivated = await sql<{ id: string }>`
-    update person_interactions pi
-    set status = 'completed', void_reason = null, updated_at = now(), version = pi.version + 1
-    from meeting_attendance ma
-    left join meeting_invitations mi on mi.id = ma.invitation_id
-    join meetings m on m.id = ma.meeting_id
-    join people p on p.id = ma.person_id
-    where pi.source_key = 'meeting_attendance:' || ma.id and pi.status = 'voided'
-      and pi.void_reason = 'La asistencia fue corregida a ausente' and coalesce(mi.attendance_status, 'attended') <> 'absent' ${meetingFilter} ${personFilter}
-    returning pi.id
-  `.execute(db);
+  // 2. La ASISTENCIA (meeting_attendance) NO genera interacciones (B3, Opción B): asistencia y contacto son dimensiones distintas.
+  //    Qué cuenta como «último contacto real» se define en B5. Revocar/restaurar una asistencia no toca interacciones.
 
   const skipped = await sql<{ n: number }>`
     select count(*)::int as n
@@ -168,9 +130,9 @@ export async function syncParticipationInteractions(db: Db, scope: Participation
   `.execute(db);
 
   return {
-    created: fromParticipations.rows.length + fromAttendance.rows.length,
-    reactivated: reactivated.rows.length,
-    voided: voided.rows.length,
+    created: fromParticipations.rows.length,
+    reactivated: 0,
+    voided: 0,
     skippedWithoutDate: Number(skipped.rows[0]?.n ?? 0),
   };
 }

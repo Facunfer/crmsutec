@@ -74,16 +74,17 @@ export async function getInvitationByToken(token: string, ip: string): Promise<I
   if (row.meeting_status === "in_progress") {
     const attendance = await db
       .selectFrom("meeting_attendance")
-      .select(["checked_in_at"])
+      .select(["checked_in_at", "recorded_at"])
       .where("meeting_id", "=", row.meeting_id)
       .where("person_id", "=", row.person_id)
+      .where("revoked_at", "is", null)
       .executeTakeFirst();
     return {
       kind: "checkin",
       meetingName: row.meeting_name,
       firstName: row.first_name,
       alreadyCheckedIn: !!attendance,
-      checkedInAt: attendance?.checked_in_at ?? null,
+      checkedInAt: attendance ? (attendance.checked_in_at ?? attendance.recorded_at) : null,
     };
   }
 
@@ -181,7 +182,7 @@ export async function respondToInvitation(
 
 export type CheckinByTokenResult =
   | { ok: true; checkedInAt: Date }
-  | { ok: false; reason: "invalid" | "not_active" | "rate_limited" };
+  | { ok: false; reason: "invalid" | "not_active" | "rate_limited" | "already_processed" };
 
 /**
  * Prioridad 1 de identificación (sección 12.2): la persona ya está
@@ -213,5 +214,6 @@ export async function checkInByInvitationToken(token: string, ip: string, userAg
     return { ok: true, checkedInAt: result.checkedInAt };
   }
   if (result.kind === "not_active") return { ok: false, reason: "not_active" };
+  if (result.kind === "already_processed") return { ok: false, reason: "already_processed" };
   return { ok: false, reason: "invalid" };
 }

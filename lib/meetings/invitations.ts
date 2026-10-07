@@ -30,8 +30,8 @@ export class MeetingInvitationError extends Error {}
  * registra nada (reintentos, doble clic y solicitudes concurrentes). Los instantes (occurred_at, response_recorded_at) se toman
  * después del bloqueo para que el orden de los eventos sea el orden real.
  *
- * `attendance_status` está deprecado: este módulo no agrega ninguna lógica nueva sobre ese campo. La reinvitación conserva el
- * comportamiento anterior (lo reinicia a «unknown»); su eliminación semántica completa llega con B3.
+ * `meeting_invitations.attendance_status` quedó DEPRECADO en B3: este módulo ya no lo lee ni lo escribe (la columna sigue en la
+ * base por compatibilidad y se retirará con una migración destructiva futura aprobada).
  */
 
 export type Trx = Transaction<Database>;
@@ -184,7 +184,6 @@ export async function createInvitationBatch(
         .set({
           token_hash: hashInvitationToken(token),
           response_status: "pending",
-          attendance_status: "unknown", // compatibilidad con el runtime anterior; campo deprecado (B3)
           invited_at: now,
           invited_by: actor.id,
           invitation_channel: channel,
@@ -287,8 +286,6 @@ export interface InvitationRow {
   firstName: string;
   lastName: string;
   responseStatus: string;
-  /** DEPRECADO (legacy): campo `attendance_status` de la invitación. Ya no es fuente de asistencia; usar `attended`. */
-  attendanceStatus: string;
   /** Asistencia presencial comprobada vigente (meeting_attendance), independiente de la invitación. */
   attended: boolean;
   invitedAt: Date;
@@ -324,7 +321,6 @@ export async function listInvitations(actor: SessionUser, meetingId: string): Pr
       "people.first_name",
       "people.last_name",
       "meeting_invitations.response_status",
-      "meeting_invitations.attendance_status",
       sql<boolean>`exists (select 1 from meeting_attendance ma where ma.meeting_id = meeting_invitations.meeting_id and ma.person_id = meeting_invitations.person_id and ${ATTENDANCE_ACTIVE})`.as("attended"),
       "meeting_invitations.invited_at",
       "meeting_invitations.invitation_channel",
@@ -349,7 +345,6 @@ export async function listInvitations(actor: SessionUser, meetingId: string): Pr
     firstName: r.first_name,
     lastName: r.last_name,
     responseStatus: r.response_status,
-    attendanceStatus: r.attendance_status,
     attended: r.attended,
     invitedAt: r.invited_at,
     invitationChannel: r.invitation_channel,

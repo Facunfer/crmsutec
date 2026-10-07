@@ -227,6 +227,7 @@ export async function getMeetingsAnalytics(actor: SessionUser): Promise<Meetings
       .selectFrom("meeting_attendance")
       .innerJoin("meetings", "meetings.id", "meeting_attendance.meeting_id")
       .select(({ fn }) => fn.count<number>("meeting_attendance.id").as("count"))
+      .where("meeting_attendance.revoked_at", "is", null)
       .where(inScope)
       .executeTakeFirstOrThrow(),
   ]);

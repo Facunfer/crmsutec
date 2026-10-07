@@ -9,6 +9,7 @@ const initialConfirmState: ConfirmState = { kind: "idle" };
 const IDENTIFY_MESSAGES: Record<string, string> = {
   not_found: "No pudimos acreditarte con esos datos. Revisá que estén bien escritos o acercate a la mesa de acreditación.",
   rate_limited: "Demasiados intentos. Esperá un momento y probá de nuevo.",
+  already_processed: "Tu asistencia ya fue procesada por la organización. Si tenés dudas, acercate a la mesa de acreditación.",
   no_session: "Esta sesión venció. Volvé a escanear el código QR.",
 };
 
@@ -59,7 +60,9 @@ export function IdentifyForm({ meetingName }: { meetingName: string }) {
         >
           {confirmPending ? "Confirmando..." : "Sí, confirmar asistencia"}
         </button>
-        {confirmState.kind !== "idle" ? (
+        {confirmState.kind === "already_processed" ? (
+          <p className="text-sm text-estado-riesgo">{IDENTIFY_MESSAGES.already_processed}</p>
+        ) : confirmState.kind !== "idle" ? (
           <p className="text-sm text-estado-riesgo">No se pudo confirmar. Volvé a intentar desde el QR.</p>
         ) : null}
       </div>

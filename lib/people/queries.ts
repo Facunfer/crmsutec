@@ -468,9 +468,14 @@ export interface PersonMeetingActivityRow {
   meetingName: string;
   startsAt: Date | null;
   responseStatus: string;
-  attendanceStatus: string;
+  /** Hecho efectivo colapsado (legacy de presentación; B5 lo reemplaza por la línea de tiempo): registration, participated, attended… */
+  activityKind: string;
   statusLabel: string;
   invited: boolean;
+  /** Asistencia VIGENTE (meeting_attendance, revoked_at IS NULL) de la persona en ESA reunión; false en campañas sin jornada. */
+  attended: boolean;
+  /** Estado de la reunión (null si es una campaña sin jornada). «Finalizada» = `finished`. */
+  meetingStatus: string | null;
   datePrecision: "exact_datetime" | "date_only" | null;
 }
 
@@ -479,17 +484,16 @@ export async function getPersonMeetingActivity(actor: SessionUser, personId: str
   if (!(await canAccessPerson(actor, personId))) return [];
 
   const db = await getDb();
-  const result = await sql<{ key: string; name: string; at: Date | null; precision: "exact_datetime" | "date_only" | null; kind: string; response: string | null; invited: boolean; campaign: boolean }>`
+  const result = await sql<{ key: string; name: string; at: Date | null; precision: "exact_datetime" | "date_only" | null; kind: string; response: string | null; invited: boolean; campaign: boolean; attended: boolean; meeting_status: string | null }>`
     with sources as (
       select mp.meeting_id, mp.campaign_key, mp.participation_kind as kind, null::text as response
       from meeting_participations mp where mp.person_id=${personId}::uuid
       union all
-      select mi.meeting_id, null, case when mi.attendance_status in ('attended','absent') then mi.attendance_status
-        when mi.response_status='confirmed' then 'confirmed' when mi.response_status='declined' then 'declined' else 'invited' end, mi.response_status
+      select mi.meeting_id, null, case when mi.response_status='confirmed' then 'confirmed' when mi.response_status='declined' then 'declined' else 'invited' end, mi.response_status
       from meeting_invitations mi where mi.person_id=${personId}::uuid and mi.withdrawn_at is null
       union all
-      select ma.meeting_id, null, case when mi.attendance_status='absent' then 'absent' else 'attended' end, null
-      from meeting_attendance ma left join meeting_invitations mi on mi.id=ma.invitation_id where ma.person_id=${personId}::uuid
+      select ma.meeting_id, null, 'attended', null
+      from meeting_attendance ma where ma.person_id=${personId}::uuid and ma.revoked_at is null
     ), effective as (
       select distinct on (s.meeting_id, s.campaign_key) s.*
       from sources s order by s.meeting_id,s.campaign_key,
@@ -503,6 +507,8 @@ export async function getPersonMeetingActivity(actor: SessionUser, personId: str
       case when m.schedule_precision='unknown' then null else m.schedule_precision end as "precision",
       (e.meeting_id is null) campaign,
       exists(select 1 from meeting_invitations mi where mi.person_id=${personId}::uuid and mi.meeting_id=e.meeting_id and mi.withdrawn_at is null) invited,
+      exists(select 1 from meeting_attendance ma where ma.person_id=${personId}::uuid and ma.meeting_id=e.meeting_id and ma.revoked_at is null) attended,
+      m.status as meeting_status,
       (select mi.response_status from meeting_invitations mi where mi.person_id=${personId}::uuid and mi.meeting_id=e.meeting_id and mi.withdrawn_at is null limit 1) response
     from effective e left join meetings m on m.id=e.meeting_id
     where e.meeting_id is null or ${meetingVisibility(actor, "m.id", "m.owner_organization_id")}
@@ -510,9 +516,9 @@ export async function getPersonMeetingActivity(actor: SessionUser, personId: str
   `.execute(db);
   return result.rows.map((r) => {
     const status = (r.kind === "registration" ? "registered" : r.kind === "unknown" ? "pending" : r.kind) as ParticipantStatus;
-    return { meetingId: r.key, meetingName: r.name, startsAt: r.at, responseStatus: r.response ?? "—", attendanceStatus: r.kind,
+    return { meetingId: r.key, meetingName: r.name, startsAt: r.at, responseStatus: r.response ?? "—", activityKind: r.kind,
       statusLabel: (PARTICIPANT_STATUS_LABEL[status] ?? "Pendiente") + (r.campaign && r.kind === "participated" ? " — jornada no determinada" : ""),
-      invited: r.invited, datePrecision: r.precision };
+      invited: r.invited, attended: r.attended, meetingStatus: r.meeting_status, datePrecision: r.precision };
   });
 }
 

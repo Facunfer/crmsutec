@@ -109,17 +109,8 @@ export async function changeMeetingStatus(
 
   await db.transaction().execute(async (trx) => {
     await trx.updateTable("meetings").set({ status: targetStatus, updated_at: new Date() }).where("id", "=", meetingId).execute();
-
-    // Al finalizar se congela el resultado (sección 11 del prompt): toda
-    // invitación que sigue "unknown" pasa a "absent" en la misma transacción.
-    if (targetStatus === "finished") {
-      await trx
-        .updateTable("meeting_invitations")
-        .set({ attendance_status: "absent" })
-        .where("meeting_id", "=", meetingId)
-        .where("attendance_status", "=", "unknown")
-        .execute();
-    }
+    // Finalizar una reunión NO crea ausencias: la falta de check-in no es evidencia de ausencia. Se muestra como «Sin asistencia
+    // registrada» (actividad gestionada por el sistema) o «Sin información» (histórico/importado); no existe el hecho «No asistió».
   });
 
 }
