@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { MeetingParticipant, MeetingParticipants } from "@/lib/meetings/participants";
 import type { ActivityMetrics } from "@/lib/activities/labels";
 import { FactChips, MetricsPanel } from "../ActivityWidgets";
+import { EnrollmentRowActions, type RegistrationClientInfo } from "./EnrollmentWidgets";
 
 function formatDate(p: MeetingParticipant): string {
   if (!p.date) return "—";
@@ -9,7 +10,12 @@ function formatDate(p: MeetingParticipant): string {
   return new Intl.DateTimeFormat("es-AR", p.datePrecision === "date_only" ? { dateStyle: "short", timeZone: "America/Argentina/Buenos_Aires" } : { dateStyle: "short", timeStyle: "short", timeZone: "America/Argentina/Buenos_Aires" }).format(p.date);
 }
 
-function Table({ rows }: { rows: MeetingParticipant[] }) {
+const iso = (d: Date | null) => (d ? d.toISOString() : null);
+function toClient(r: NonNullable<MeetingParticipant["registration"]>): RegistrationClientInfo {
+  return { ...r, registeredAt: iso(r.registeredAt), voidedAt: iso(r.voidedAt) };
+}
+
+function Table({ rows, meetingId, canManageEnrollments }: { rows: MeetingParticipant[]; meetingId: string; canManageEnrollments: boolean }) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
@@ -37,6 +43,7 @@ function Table({ rows }: { rows: MeetingParticipant[] }) {
               <td className="py-1.5 pr-4">{p.reparticionName ?? "—"}</td>
               <td className="py-1.5 pr-4">
                 <FactChips facts={p.facts} provenance={p.provenance.join(" · ")} />
+                {canManageEnrollments && p.registration ? <EnrollmentRowActions meetingId={meetingId} registration={toClient(p.registration)} /> : null}
               </td>
               {/* La referencia técnica de la fuente queda solo como detalle (tooltip), nunca como texto principal. */}
               <td className="py-1.5 pr-4 text-xs text-brand-500" title={p.technicalRefs.length ? `Fuente: ${p.technicalRefs.join(", ")}` : undefined}>
@@ -55,7 +62,7 @@ function Table({ rows }: { rows: MeetingParticipant[] }) {
  * Personas de la reunión: cada una con sus HECHOS independientes (invitación, respuesta, inscripción, participación, asistencia),
  * nunca un único estado. Solo personas del alcance del usuario. Las participaciones de campaña sin jornada probada van aparte.
  */
-export function ParticipantsSection({ participants, metrics }: { participants: MeetingParticipants; metrics: ActivityMetrics | null }) {
+export function ParticipantsSection({ participants, metrics, meetingId, canManageEnrollments }: { participants: MeetingParticipants; metrics: ActivityMetrics | null; meetingId: string; canManageEnrollments: boolean }) {
   return (
     <section className="rounded-lg bg-white p-4 shadow-sm">
       <h2 className="mb-3 text-sm font-semibold text-brand-900">Resumen de esta jornada</h2>
@@ -66,7 +73,7 @@ export function ParticipantsSection({ participants, metrics }: { participants: M
         {participants.assigned.length} persona(s) vinculadas a esta jornada. Inscribirse, aceptar una invitación o figurar en un registro no es asistir.
         Solo se muestran las personas dentro de tu alcance.
       </p>
-      {participants.assigned.length === 0 ? <p className="text-sm text-brand-400">Sin personas vinculadas a esta jornada (dentro de tu alcance).</p> : <Table rows={participants.assigned} />}
+      {participants.assigned.length === 0 ? <p className="text-sm text-brand-400">Sin personas vinculadas a esta jornada (dentro de tu alcance).</p> : <Table rows={participants.assigned} meetingId={meetingId} canManageEnrollments={canManageEnrollments} />}
 
       {participants.campaign ? (
         <div className="mt-6">
@@ -78,7 +85,7 @@ export function ParticipantsSection({ participants, metrics }: { participants: M
           {participants.campaign.participants.length === 0 ? (
             <p className="text-sm text-brand-400">Ninguna dentro de tu alcance.</p>
           ) : (
-            <Table rows={participants.campaign.participants} />
+            <Table rows={participants.campaign.participants} meetingId={meetingId} canManageEnrollments={canManageEnrollments} />
           )}
         </div>
       ) : null}

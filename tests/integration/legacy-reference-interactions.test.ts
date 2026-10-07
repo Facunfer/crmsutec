@@ -128,7 +128,10 @@ describe("legacy:reconcile-interactions", () => {
         .executeTakeFirstOrThrow()
     ).id;
     const rowUnknown = await makeProvenance({ entityId: participationUnknown });
+    // Fixture: los importadores reales fijan import_row_id al insertar; acá se enlaza después, así que se suspende el guard (0041) solo para armarlo.
+    await sql`alter table meeting_participations disable trigger meeting_participations_guard`.execute(db);
     await db.updateTable("meeting_participations").set({ import_row_id: rowUnknown }).where("id", "=", participationUnknown).execute();
+    await sql`alter table meeting_participations enable trigger meeting_participations_guard`.execute(db);
 
     // 2) Campaña real (Teatro Colón), con una reunión "agenda" representativa ya cargada (jornada real conocida en
     //    otra fuente) y una participación de campaña sin jornada propia, con procedencia verificada.
@@ -159,7 +162,10 @@ describe("legacy:reconcile-interactions", () => {
         .executeTakeFirstOrThrow()
     ).id;
     const rowCampaign = await makeProvenance({ entityId: participationCampaign });
+    // Fixture: los importadores reales fijan import_row_id al insertar; acá se enlaza después, así que se suspende el guard (0041) solo para armarlo.
+    await sql`alter table meeting_participations disable trigger meeting_participations_guard`.execute(db);
     await db.updateTable("meeting_participations").set({ import_row_id: rowCampaign }).where("id", "=", participationCampaign).execute();
+    await sql`alter table meeting_participations enable trigger meeting_participations_guard`.execute(db);
 
     // 3) Misma campaña, pero SIN procedencia verificable (import_row_id nulo): debe quedar como caso AMBIGUO, nunca
     //    procesarse, aunque su participation_basis diga legacy_initial_import.

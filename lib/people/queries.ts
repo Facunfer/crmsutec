@@ -487,7 +487,7 @@ export async function getPersonMeetingActivity(actor: SessionUser, personId: str
   const result = await sql<{ key: string; name: string; at: Date | null; precision: "exact_datetime" | "date_only" | null; kind: string; response: string | null; invited: boolean; campaign: boolean; attended: boolean; meeting_status: string | null }>`
     with sources as (
       select mp.meeting_id, mp.campaign_key, mp.participation_kind as kind, null::text as response
-      from meeting_participations mp where mp.person_id=${personId}::uuid
+      from meeting_participations mp where mp.person_id=${personId}::uuid and mp.voided_at is null
       union all
       select mi.meeting_id, null, case when mi.response_status='confirmed' then 'confirmed' when mi.response_status='declined' then 'declined' else 'invited' end, mi.response_status
       from meeting_invitations mi where mi.person_id=${personId}::uuid and mi.withdrawn_at is null

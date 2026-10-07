@@ -51,6 +51,23 @@ export const PARTICIPATED_WITHOUT_MEETING_SUFFIX = " — jornada no determinada"
 // Cuanto mayor, más fuerte: lo que se muestra cuando una persona tiene varias fuentes.
 const STRENGTH: Record<ParticipantStatus, number> = { attended: 70, participated: 65, approved: 60, absent: 50, registered: 40, confirmed: 35, declined: 30, invited: 20, pending: 10 };
 
+/** La inscripción de la persona en esta actividad (B4). Solo trae nombres de usuarios y motivos si quien mira puede gestionar inscripciones. */
+export interface RegistrationInfo {
+  participationId: string;
+  /** Vigente = no anulada. Una anulada solo se informa a quien gestiona inscripciones. */
+  active: boolean;
+  /** Cargada desde el CRM por un operador (false = importada: sin operador, fecha ni canal). */
+  operative: boolean;
+  /** Nacida de «Inscribir aceptados» (invitación de origen). */
+  fromAcceptance: boolean;
+  originChannel: string | null;
+  registeredAt: Date | null;
+  registeredAtPrecision: "exact_datetime" | "date_only" | null;
+  voidedAt: Date | null;
+  voidReason: string | null;
+  recordedByName: string | null;
+}
+
 export interface MeetingParticipant {
   personId: string;
   firstName: string;
@@ -69,6 +86,8 @@ export interface MeetingParticipant {
   datePrecision: "exact_datetime" | "date_only" | null;
   /** Hechos independientes de la persona en esta actividad (lo que muestra la UI). */
   facts: PersonActivityFacts;
+  /** Detalle de la inscripción (null si no tiene). Los hechos `facts.registered` cuentan solo la VIGENTE. */
+  registration: RegistrationInfo | null;
   /** Procedencia en lenguaje humano, una frase por hecho («Participación histórica inicial», «Inscripción según listado importado»…). */
   provenance: string[];
   /** Referencias técnicas de la fuente (códigos de listado importado): solo como detalle, nunca como texto principal. */
@@ -103,6 +122,17 @@ interface RawRow {
   imported: boolean | null;
   tech_ref: string | null;
   method: string | null;
+  // Inscripción (solo filas de meeting_participations)
+  participation_id?: string;
+  voided?: boolean;
+  voided_at?: Date | null;
+  void_reason?: string | null;
+  operative?: boolean;
+  from_acceptance?: boolean;
+  recorder_name?: string | null;
+  origin_channel?: string | null;
+  registered_at?: Date | null;
+  registered_precision?: "exact_datetime" | "date_only" | null;
 }
 
 export const PEOPLE_COLUMNS = sql`
@@ -124,7 +154,7 @@ const ATTENDANCE_METHOD: Record<string, string> = {
 const emptyFacts = (): PersonActivityFacts => ({ invited: false, response: null, registered: false, participated: false, participationBases: [], attended: false });
 
 /** Acumula en `facts`/`provenance` lo que aporta UNA fuente. Cada hecho es independiente: ninguno infiere a otro. */
-function accumulateFact(m: Pick<MeetingParticipant, "facts" | "provenance" | "technicalRefs">, r: RawRow): void {
+function accumulateFact(m: Pick<MeetingParticipant, "facts" | "provenance" | "technicalRefs" | "registration">, r: RawRow): void {
   const add = (text: string) => { if (!m.provenance.includes(text)) m.provenance.push(text); };
   if (r.src === "invitation") {
     m.facts.invited = true;
@@ -135,8 +165,25 @@ function accumulateFact(m: Pick<MeetingParticipant, "facts" | "provenance" | "te
     m.facts.participated = true; // regla derivada: Asistió ⊆ Participó (sin fila física en meeting_participations)
     add(ATTENDANCE_METHOD_COPY[r.method ?? ""] ?? "Asistencia comprobada");
   } else if (r.raw_kind === "registration") {
-    m.facts.registered = true;
-    add(r.imported ? "Inscripción según listado importado" : "Inscripción registrada en el sistema");
+    m.registration = {
+      participationId: r.participation_id!,
+      active: !r.voided,
+      operative: !!r.operative,
+      fromAcceptance: !!r.from_acceptance,
+      originChannel: r.origin_channel ?? null,
+      registeredAt: r.registered_at ?? null,
+      registeredAtPrecision: r.registered_precision ?? null,
+      voidedAt: r.voided_at ?? null,
+      voidReason: r.void_reason ?? null,
+      recordedByName: r.recorder_name ?? null,
+    };
+    if (r.voided) {
+      // Una inscripción anulada NO es un hecho vigente: sin chip activo.
+      add("Inscripción anulada");
+    } else {
+      m.facts.registered = true;
+      add(r.operative ? (r.from_acceptance ? "Inscripción desde la aceptación de la invitación" : "Inscripción cargada en el CRM") : r.imported ? "Inscripción según listado importado" : "Inscripción registrada en el sistema");
+    }
   } else if (r.raw_kind === "participated" || r.raw_kind === "attended") {
     m.facts.participated = true;
     const basis = r.basis ?? "standard";
@@ -167,6 +214,7 @@ function merge(rows: RawRow[], canSeeSensitive: boolean, meetingDate: { date: Da
         date: r.at,
         datePrecision: r.at_precision,
         facts: emptyFacts(),
+        registration: null,
         provenance: [],
         technicalRefs: [],
         _strength: strength,
@@ -201,6 +249,8 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
 
   const db = await getDb();
   const canSeeSensitive = can(actor, "people.view_sensitive");
+  // Las inscripciones ANULADAS, con quién las cargó y el motivo, solo las ve quien gestiona inscripciones (temporal: manage_invitations).
+  const canManageEnrollments = can(actor, "meetings.manage_invitations");
 
   // Todas estas lecturas son independientes entre sí: se lanzan juntas (un solo round trip en vez de ~8 en serie). La
   // visibilidad se evalúa en la misma tanda; si la reunión no es visible, lo leído se descarta y no se devuelve nada.
@@ -212,15 +262,21 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     select ${PEOPLE_COLUMNS},
            case mp.participation_kind
              when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
-             when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
+             when 'registration' then (case when mp.voided_at is null then 'registered' else 'pending' end) when 'invited' then 'invited' else 'pending' end as status,
            coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
            null::timestamptz as at, null::text as at_precision,
            'participation' as src, mp.participation_kind as raw_kind, mp.participation_basis as basis, null::text as response,
-           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method
+           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method,
+           mp.id as participation_id, (mp.voided_at is not null) as voided, mp.voided_at,
+           (case when ${canManageEnrollments}::boolean then mp.void_reason end) as void_reason,
+           (mp.recorded_by is not null) as operative, (mp.origin_invitation_id is not null) as from_acceptance,
+           (case when ${canManageEnrollments}::boolean then ru.full_name end) as recorder_name,
+           mp.origin_channel, mp.registered_at, mp.registered_at_precision as registered_precision
     from meeting_participations mp
     join people p on p.id = mp.person_id
     left join import_rows ir on ir.id = mp.import_row_id
-    where mp.meeting_id = ${meetingId}::uuid and ${personInScope(actor, "p.id")}
+    left join users ru on ru.id = mp.recorded_by
+    where mp.meeting_id = ${meetingId}::uuid and (mp.voided_at is null or ${canManageEnrollments}::boolean) and ${personInScope(actor, "p.id")}
   `.execute(db);
 
   const invitationsQuery = sql<RawRow>`
@@ -250,15 +306,21 @@ export async function listMeetingParticipants(actor: SessionUser, meetingId: str
     select ${PEOPLE_COLUMNS},
            case mp.participation_kind
              when 'attended' then 'attended' when 'participated' then 'participated' when 'approved' then 'approved' when 'absent' then 'absent'
-             when 'registration' then 'registered' when 'invited' then 'invited' else 'pending' end as status,
+             when 'registration' then (case when mp.voided_at is null then 'registered' else 'pending' end) when 'invited' then 'invited' else 'pending' end as status,
            coalesce('Importación ' || ir.source_file_code, 'Registro') as origin,
            null::timestamptz as at, null::text as at_precision,
            'participation' as src, mp.participation_kind as raw_kind, mp.participation_basis as basis, null::text as response,
-           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method
+           (mp.import_row_id is not null) as imported, ir.source_file_code as tech_ref, null::text as method,
+           mp.id as participation_id, (mp.voided_at is not null) as voided, mp.voided_at,
+           (case when ${canManageEnrollments}::boolean then mp.void_reason end) as void_reason,
+           (mp.recorded_by is not null) as operative, (mp.origin_invitation_id is not null) as from_acceptance,
+           (case when ${canManageEnrollments}::boolean then ru.full_name end) as recorder_name,
+           mp.origin_channel, mp.registered_at, mp.registered_at_precision as registered_precision
     from meeting_participations mp
     join people p on p.id = mp.person_id
     left join import_rows ir on ir.id = mp.import_row_id
-    where mp.meeting_id is null
+    left join users ru on ru.id = mp.recorded_by
+    where mp.meeting_id is null and (mp.voided_at is null or ${canManageEnrollments}::boolean)
       and mp.campaign_key = (select c.campaign_key from meetings mm join campaigns c on c.id = mm.campaign_id where mm.id = ${meetingId}::uuid)
       and ${personInScope(actor, "p.id")}
   `.execute(db);

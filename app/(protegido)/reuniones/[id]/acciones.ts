@@ -7,6 +7,21 @@ import { createInvitationBatch, MeetingInvitationError, recordInvitationResponse
 import { searchAnyActivePeople } from "@/lib/associations/queries";
 import { regenerateQrSecret, MeetingCommandError } from "@/lib/meetings/commands";
 import {
+  correctEnrollment,
+  enrollAccepted,
+  enrollPerson,
+  listEnrollmentEvents,
+  previewEnrollAccepted,
+  RegistrationError,
+  restoreEnrollment,
+  searchPeopleForEnrollment,
+  voidEnrollment,
+  type AcceptedEnrollmentCounts,
+  type EnrollmentSearchResult,
+  type EnrollmentWhen,
+} from "@/lib/meetings/registrations";
+
+import {
   correctAttendance,
   listAttendanceEvents,
   ManualAttendanceError,
@@ -173,6 +188,117 @@ export async function listAttendanceHistoryAction(meetingId: string, personId: s
         reason: e.reason,
         checkedInAt: e.checkedInAt ? e.checkedInAt.toISOString() : null,
         precision: e.occurredPrecision,
+      })),
+    };
+  } catch {
+    return { ok: false, error: "No se pudo leer el historial." };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Inscripciones (B4). Hecho independiente: ninguna de estas acciones crea invitación, participación, asistencia ni interacción.
+// ---------------------------------------------------------------------------------------------------------------------
+
+function toEnrollmentWhen(when: AttendanceWhenInput): EnrollmentWhen {
+  if (when.mode === "now") return { kind: "now" };
+  if (when.mode === "unknown") return { kind: "unknown" };
+  if (when.mode === "date_only") return { kind: "date_only", day: when.day ?? "" };
+  return { kind: "exact", at: new Date(`${when.day ?? ""}T${when.time || "00:00"}:00-03:00`) };
+}
+
+async function runEnrollment<T extends { changed?: boolean }>(meetingId: string, work: () => Promise<T>): Promise<SimpleResult & { changed?: boolean }> {
+  try {
+    const result = await work();
+    revalidatePath(`/reuniones/${meetingId}`);
+    return { ok: true, changed: result.changed };
+  } catch (err) {
+    return { ok: false, error: err instanceof RegistrationError ? err.message : "No se pudo completar la acción." };
+  }
+}
+
+export async function searchPeopleForEnrollmentAction(meetingId: string, term: string): Promise<{ results: EnrollmentSearchResult[] }> {
+  const actor = await requireUser();
+  try {
+    return { results: await searchPeopleForEnrollment(actor, meetingId, term) };
+  } catch {
+    return { results: [] };
+  }
+}
+
+/** Registrar una inscripción manual. Canal real obligatorio; en una reunión finalizada, fecha explícita (o desconocida) y motivo. */
+export async function enrollPersonAction(meetingId: string, personId: string, input: { channel: string; when: AttendanceWhenInput; reason?: string }) {
+  const actor = await requireUser();
+  return runEnrollment(meetingId, () => enrollPerson(actor, { meetingId, personId, channel: input.channel, when: toEnrollmentWhen(input.when), reason: input.reason }));
+}
+
+export async function previewEnrollAcceptedAction(meetingId: string): Promise<{ ok: true; counts: AcceptedEnrollmentCounts } | { ok: false; error: string }> {
+  const actor = await requireUser();
+  try {
+    return { ok: true, counts: await previewEnrollAccepted(actor, meetingId) };
+  } catch (err) {
+    return { ok: false, error: err instanceof RegistrationError ? err.message : "No se pudo calcular la vista previa." };
+  }
+}
+
+/** «Inscribir aceptados»: acción explícita (siempre tras la vista previa); idempotente; no restaura las anuladas. */
+export async function enrollAcceptedAction(meetingId: string): Promise<{ ok: true; counts: AcceptedEnrollmentCounts } | { ok: false; error: string }> {
+  const actor = await requireUser();
+  try {
+    const counts = await enrollAccepted(actor, meetingId);
+    revalidatePath(`/reuniones/${meetingId}`);
+    return { ok: true, counts };
+  } catch (err) {
+    return { ok: false, error: err instanceof RegistrationError ? err.message : "No se pudo inscribir a los aceptados." };
+  }
+}
+
+export async function voidEnrollmentAction(meetingId: string, participationId: string, reason: string) {
+  const actor = await requireUser();
+  return runEnrollment(meetingId, () => voidEnrollment(actor, { participationId, reason }));
+}
+
+export async function restoreEnrollmentAction(meetingId: string, participationId: string, reason: string) {
+  const actor = await requireUser();
+  return runEnrollment(meetingId, () => restoreEnrollment(actor, { participationId, reason }));
+}
+
+export async function correctEnrollmentAction(
+  meetingId: string,
+  participationId: string,
+  input: { reason: string; when: Exclude<AttendanceWhenInput, { mode: "now" }>; channel?: string }
+) {
+  const actor = await requireUser();
+  return runEnrollment(meetingId, () =>
+    correctEnrollment(actor, { participationId, reason: input.reason, when: toEnrollmentWhen(input.when) as Exclude<EnrollmentWhen, { kind: "now" }>, channel: input.channel })
+  );
+}
+
+export interface EnrollmentHistoryItem {
+  eventType: string;
+  occurredAt: string;
+  recordedBy: string;
+  reason: string | null;
+  originChannel: string | null;
+  fromAcceptance: boolean;
+  registeredAt: string | null;
+  precision: string | null;
+}
+
+export async function listEnrollmentHistoryAction(participationId: string): Promise<{ ok: true; events: EnrollmentHistoryItem[] } | { ok: false; error: string }> {
+  const actor = await requireUser();
+  try {
+    const events = await listEnrollmentEvents(actor, participationId);
+    return {
+      ok: true,
+      events: events.map((e) => ({
+        eventType: e.eventType,
+        occurredAt: e.occurredAt.toISOString(),
+        recordedBy: e.recordedByName ?? "un operador",
+        reason: e.reason,
+        originChannel: e.originChannel,
+        fromAcceptance: e.originInvitationId !== null,
+        registeredAt: e.registeredAt ? e.registeredAt.toISOString() : null,
+        precision: e.registeredAtPrecision,
       })),
     };
   } catch {

@@ -373,7 +373,8 @@ export async function getDashboardCounts(actor: SessionUser): Promise<DashboardC
 }
 
 export interface ParticipationInteractionKpis {
-  /** TODAS las filas de meeting_participations en el alcance, cualquier participation_kind (incluye 'registration'
+  /** MÉTRICA TÉCNICA (no funcional): incluye también las inscripciones ANULADAS (voided_at no nulo), que siguen existiendo
+   * físicamente; no alimenta ningún KPI de inscriptos/participantes. TODAS las filas de meeting_participations en el alcance, cualquier participation_kind (incluye 'registration'
    * que convive con su 'participated' agregada por la carga histórica: cada una es una fila física distinta). */
   physicalParticipationRows: number;
   /** Solo 'attended' o 'participated': la participación REAL, sin contar 'registration'/'invited'/'absent'/'approved'

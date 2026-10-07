@@ -136,7 +136,7 @@ export function meetingVisibility(user: SessionUser, meetingIdColumn = "meetings
     or exists (
       select 1 from meeting_participations mp
       join people pp on pp.id = mp.person_id
-      where mp.meeting_id = ${sql.ref(meetingIdColumn)} and pp.organization_id in (${acc})
+      where mp.meeting_id = ${sql.ref(meetingIdColumn)} and mp.voided_at is null and pp.organization_id in (${acc})
     )
     or exists (
       select 1 from meeting_invitations mi

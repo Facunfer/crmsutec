@@ -766,6 +766,38 @@ export interface MeetingParticipationsTable {
   import_row_id: string | null;
   created_at: Generated<Date>;
   participation_basis: Generated<ParticipationBasis>;
+  // 0041 — inscripción operativa. NULL en todo lo importado (las 961 inscripciones históricas no reciben nada inventado).
+  /** Cuándo ocurrió realmente la inscripción (ver registered_at_precision). NULL = no registrada / se desconoce. */
+  registered_at: Date | null;
+  registered_at_precision: "exact_datetime" | "date_only" | null;
+  /** Usuario que la cargó desde el CRM (NULL = importada). */
+  recorded_by: string | null;
+  /** Canal REAL de una inscripción manual. NULL si nació de una aceptación o es importada. */
+  origin_channel: RegistrationChannel | null;
+  /** Invitación confirmada de la que nació ("Inscribir aceptados"). El canal de respuesta vive en la invitación. */
+  origin_invitation_id: string | null;
+  voided_at: Date | null;
+  voided_by: string | null;
+  void_reason: string | null;
+}
+
+export type RegistrationChannel = "whatsapp" | "email" | "sms" | "phone" | "in_person" | "other";
+export type RegistrationEventType = "registered" | "voided" | "restored" | "corrected";
+
+/** 0042 — historial append-only de inscripciones operativas. `meeting_participations` es el estado actual. */
+export interface MeetingRegistrationEventsTable {
+  id: Generated<string>;
+  seq: Generated<string>;
+  participation_id: string;
+  person_id: string;
+  event_type: RegistrationEventType;
+  occurred_at: Generated<Date>;
+  recorded_by: string;
+  reason: string | null;
+  origin_channel: RegistrationChannel | null;
+  origin_invitation_id: string | null;
+  registered_at: Date | null;
+  registered_at_precision: "exact_datetime" | "date_only" | null;
 }
 
 export interface PersonObservationsTable {
@@ -833,6 +865,7 @@ export interface Database {
   import_issues: ImportIssuesTable;
   import_entity_links: ImportEntityLinksTable;
   meeting_participations: MeetingParticipationsTable;
+  meeting_registration_events: MeetingRegistrationEventsTable;
   sutecba_meta: SutecbaMetaTable;
   sutecba_migrations: SutecbaMigrationsTable;
 }

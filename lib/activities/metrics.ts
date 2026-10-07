@@ -9,6 +9,7 @@ assertServerOnly("lib/activities/metrics.ts");
 
 /**
  * MÉTRICAS DE ACTIVIDAD (Fase B1). Única definición de los siete conteos; las pantallas no calculan nada por su cuenta.
+ * Inscriptos = `registration` VIGENTE (`voided_at IS NULL`, B4): una inscripción anulada no cuenta. Participaron y Asistieron no dependen de ella.
  * Todo es DISTINCT person_id dentro del alcance del usuario (`personInScope`); las categorías solapadas nunca se suman.
  * Definiciones exactas: docs/FASE-B-DISENO.md §3.
  *
@@ -65,7 +66,7 @@ export async function loadMeetingMetrics(actor: SessionUser, meetingIds?: readon
       (select count(*)::int from meeting_invitations mi where mi.meeting_id = m.id and mi.withdrawn_at is null and mi.response_status = 'confirmed' and ${personInScope(actor, "mi.person_id")}) as accepted,
       (select count(*)::int from meeting_invitations mi where mi.meeting_id = m.id and mi.withdrawn_at is null and mi.response_status = 'declined' and ${personInScope(actor, "mi.person_id")}) as declined,
       (select count(*)::int from meeting_invitations mi where mi.meeting_id = m.id and mi.withdrawn_at is null and mi.response_status = 'pending' and ${personInScope(actor, "mi.person_id")}) as pending,
-      (select count(distinct mp.person_id)::int from meeting_participations mp where mp.meeting_id = m.id and mp.participation_kind = 'registration' and ${personInScope(actor, "mp.person_id")}) as registered,
+      (select count(distinct mp.person_id)::int from meeting_participations mp where mp.meeting_id = m.id and mp.participation_kind = 'registration' and mp.voided_at is null and ${personInScope(actor, "mp.person_id")}) as registered,
       (select count(distinct x.person_id)::int from (
          select mp.person_id from meeting_participations mp where mp.meeting_id = m.id and mp.participation_kind in ${PARTICIPATED_KINDS}
          union all
@@ -97,9 +98,9 @@ export async function loadCampaignMetrics(actor: SessionUser, campaignIds?: read
     select c.id,
       inv.invited, inv.accepted, inv.declined, inv.pending,
       (select count(distinct x.person_id)::int from (
-         select mp.person_id from meeting_participations mp where mp.meeting_id is null and mp.campaign_key = c.campaign_key and mp.participation_kind = 'registration'
+         select mp.person_id from meeting_participations mp where mp.meeting_id is null and mp.campaign_key = c.campaign_key and mp.participation_kind = 'registration' and mp.voided_at is null
          union all
-         select mp.person_id from meeting_participations mp join meetings mj on mj.id = mp.meeting_id where mj.campaign_id = c.id and mp.participation_kind = 'registration'
+         select mp.person_id from meeting_participations mp join meetings mj on mj.id = mp.meeting_id where mj.campaign_id = c.id and mp.participation_kind = 'registration' and mp.voided_at is null
        ) x where ${personInScope(actor, "x.person_id")}) as registered,
       (select count(distinct x.person_id)::int from (
          select mp.person_id from meeting_participations mp where mp.meeting_id is null and mp.campaign_key = c.campaign_key and mp.participation_kind in ${PARTICIPATED_KINDS}

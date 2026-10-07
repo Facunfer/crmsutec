@@ -84,7 +84,7 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
       "users.full_name as organizer_name",
       sql<number>`(
         select count(distinct mp.person_id)::int from meeting_participations mp
-        where mp.meeting_id = meetings.id and ${personInScope(actor, "mp.person_id")}
+        where mp.meeting_id = meetings.id and mp.voided_at is null and ${personInScope(actor, "mp.person_id")}
       )`.as("participants_count"),
       // Personas de la campaña de esta jornada (meetings.campaign_id) con participación a nivel campaña, dentro del alcance:
       // null si la reunión no pertenece a ninguna campaña.
@@ -94,7 +94,7 @@ export async function listMeetings(actor: SessionUser, filter: MeetingListFilter
           else (
             select count(distinct mp2.person_id)::int from meeting_participations mp2
             join campaigns cc on cc.id = meetings.campaign_id
-            where mp2.meeting_id is null and mp2.campaign_key = cc.campaign_key
+            where mp2.meeting_id is null and mp2.campaign_key = cc.campaign_key and mp2.voided_at is null
               and ${personInScope(actor, "mp2.person_id")}
           )
         end

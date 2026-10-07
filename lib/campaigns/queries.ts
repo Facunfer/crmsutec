@@ -108,7 +108,7 @@ export async function getCampaignById(actor: SessionUser, id: string): Promise<C
     sql<{ id: string; name: string; schedule_precision: CampaignJornada["schedulePrecision"]; day: string | null; status: string; n: number }>`
       select m.id, m.name, m.schedule_precision, m.status,
         case when m.schedule_precision = 'unknown' then null else to_char(coalesce(m.event_date, (m.starts_at at time zone 'America/Argentina/Buenos_Aires')::date), 'YYYY-MM-DD') end as day,
-        (select count(distinct mp.person_id)::int from meeting_participations mp where mp.meeting_id = m.id and ${personInScope(actor, "mp.person_id")}) as n
+        (select count(distinct mp.person_id)::int from meeting_participations mp where mp.meeting_id = m.id and mp.voided_at is null and ${personInScope(actor, "mp.person_id")}) as n
       from meetings m
       where m.campaign_id = ${id}::uuid and ${meetingVisibility(actor, "m.id", "m.owner_organization_id")}
       order by coalesce(m.starts_at, m.event_date::timestamptz) asc nulls last, m.name
@@ -117,7 +117,7 @@ export async function getCampaignById(actor: SessionUser, id: string): Promise<C
       select count(distinct mp.person_id)::int as n
       from meeting_participations mp
       join campaigns c on c.campaign_key = mp.campaign_key
-      where c.id = ${id}::uuid and mp.meeting_id is null and ${personInScope(actor, "mp.person_id")}
+      where c.id = ${id}::uuid and mp.meeting_id is null and mp.voided_at is null and ${personInScope(actor, "mp.person_id")}
     `.execute(db),
   ]);
   const base = list.find((c) => c.id === id);
@@ -178,7 +178,7 @@ export async function listCampaignParticipants(
   const grouped = sql`
     select x.person_id,
            (bool_or(x.src = 'participation' and x.kind in ${PARTICIPATED_KINDS}) or bool_or(x.src = 'attendance')) as participated,
-           bool_or(x.src = 'participation' and x.kind = 'registration') as registered,
+           bool_or(x.src = 'participation' and x.kind = 'registration' and not x.voided) as registered,
            bool_or(x.in_jornada) as in_jornada,
            bool_or(x.src = 'attendance') as attended,
            case when bool_or(x.src = 'invitation') then
@@ -188,19 +188,19 @@ export async function listCampaignParticipants(
                 else null end as response,
            coalesce(array_agg(distinct x.basis) filter (where x.src = 'participation' and x.kind in ${PARTICIPATED_KINDS}), '{}') as bases
     from (
-      select mp.person_id, 'participation' as src, mp.participation_kind as kind, mp.participation_basis as basis, false as in_jornada
+      select mp.person_id, 'participation' as src, mp.participation_kind as kind, mp.participation_basis as basis, false as in_jornada, (mp.voided_at is not null) as voided
       from meeting_participations mp join campaigns c on c.campaign_key = mp.campaign_key
       where c.id = ${campaignId}::uuid and mp.meeting_id is null
       union all
-      select mp.person_id, 'participation', mp.participation_kind, mp.participation_basis, true
+      select mp.person_id, 'participation', mp.participation_kind, mp.participation_basis, true, (mp.voided_at is not null)
       from meeting_participations mp join meetings mj on mj.id = mp.meeting_id
       where mj.campaign_id = ${campaignId}::uuid
       union all
-      select mi.person_id, 'invitation', mi.response_status, null, true
+      select mi.person_id, 'invitation', mi.response_status, null, true, false
       from meeting_invitations mi join meetings mj on mj.id = mi.meeting_id
       where mj.campaign_id = ${campaignId}::uuid and mi.withdrawn_at is null
       union all
-      select ma.person_id, 'attendance', ma.method, null, true
+      select ma.person_id, 'attendance', ma.method, null, true, false
       from meeting_attendance ma join meetings mj on mj.id = ma.meeting_id
       where mj.campaign_id = ${campaignId}::uuid and ${ATTENDANCE_ACTIVE}
     ) x

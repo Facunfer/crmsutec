@@ -16,6 +16,7 @@ import { AssociationsPicker } from "./AssociationsPicker";
 import { InvitationWizard } from "./InvitationWizard";
 import { InvitationsList } from "./InvitationsList";
 import { ParticipantsSection } from "./ParticipantsSection";
+import { EnrollmentSection } from "./EnrollmentWidgets";
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", {
@@ -75,7 +76,11 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
         </div>
       </div>
 
-      <ParticipantsSection participants={participants} metrics={metricsMap.get(id) ?? null} />
+      {canManageInv && meeting.status !== "cancelled" ? (
+        <EnrollmentSection meetingId={id} meetingStatus={meeting.status} hasInvitations={invitations.some((i) => !i.withdrawn)} />
+      ) : null}
+
+      <ParticipantsSection participants={participants} metrics={metricsMap.get(id) ?? null} meetingId={id} canManageEnrollments={canManageInv} />
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos</h2>

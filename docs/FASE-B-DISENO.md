@@ -109,7 +109,11 @@ asistencia usa `meetings.attendance_manual`, siempre con la persona dentro del a
   `dni` · `email` · `phone` · `invitation_token`; el CHECK de `method` conserva los valores anteriores por compatibilidad), `UNIQUE(id, meeting_id, person_id)`,
   índice por `person_id` y guard reescrito (identidad inmutable; solo cambian la revocación y la hora de una asistencia manual).
 - **0040 (B3)** — `meeting_attendance_events`: historial append-only (`checked_in`, `revoked`, `restored`, `corrected`), `seq`, FK compuesta, RLS, SELECT/INSERT para la app.
-- **0041 (B4)** — `meeting_participations`: `registered_at` (NULL en lo histórico), `recorded_by`, `origin_channel`, anulación `voided_*` solo para inscripciones `standard`.
+- **0041 (B4)** — `meeting_participations`: `recorded_by`, `registered_at`, `registered_at_precision`, `origin_channel`, `origin_invitation_id`, `voided_at/by`, `void_reason`
+  (8 columnas NULL; lo histórico queda en NULL, sin backfill). CHECK de dos clases operativas, FK compuesta `(origin_invitation_id, meeting_id, person_id)` → `meeting_invitations`,
+  `UNIQUE (id, person_id)`, guard trigger (identidad y origen inmutables) y `GRANT UPDATE` por columna.
+- **0042 (B4)** — `meeting_registration_events`: historial append-only (`registered`, `voided`, `restored`, `corrected`), `seq`, FK compuesta, RLS, SELECT/INSERT para la app.
+- **B5 empieza en 0043.**
 - No se endurece el CHECK de `participation_kind` (los tipos sobrantes `invited/attended/absent/approved/unknown` quedan intactos).
 
 ### 7.1 B2 — invitación y respuesta (reglas)
@@ -152,12 +156,28 @@ Los escritores heredados de `attendance_status` (`commands.ts`, `manual.ts`, `ch
 - **Alcance estricto:** panel, búsquedas, carga manual, revocación, restauración, corrección e historial respetan el alcance ACTUAL de la persona. Master conserva la vista global.
 - **Invariante de integridad (aplicación):** ver `lib/attendance/events.ts`.
 
+### 7.4 B4 — inscripción operativa (reglas)
+
+- **Nivel:** las inscripciones nuevas son solo a nivel reunión/jornada (nunca de campaña). Las 805 históricas de campaña no se tocan. Se inscribe en `draft`, `scheduled`, `in_progress`;
+  en `finished` solo como carga retroactiva (con motivo y fecha pasada, nunca «ahora»); `cancelled` no.
+- **Dos clases de fila operativa (CHECK):** **A manual** — `recorded_by`, `origin_channel` (whatsapp/email/sms/phone/in_person/other), sin invitación de origen;
+  **B desde aceptación** — `recorded_by`, `origin_invitation_id` (misma reunión y persona, por FK compuesta), `origin_channel` NULL (el canal de respuesta NO se copia; `public_link` no es canal de inscripción).
+  Las filas históricas (961) conservan todo en NULL: sin operador, fecha, canal ni invitación; sin eventos retroactivos.
+- **«Inscribir aceptados»:** vista previa + confirmación; un único `INSERT … SELECT … ON CONFLICT DO NOTHING` sobre invitaciones vigentes `confirmed` de personas en alcance, `registered_at` = instante de ejecución.
+  Idempotente, no restaura anuladas, informa solo la cantidad fuera de alcance, sin tabla de tandas.
+- **Anular / restaurar / corregir:** motivo obligatorio, usuario y evento en la misma transacción con la fila bloqueada (`FOR UPDATE`); reintentos = no-op. Anulada: no cuenta como Inscripto ni muestra chip activo,
+  conserva fila y procedencia, y NO afecta participación, asistencia, invitación, respuesta ni interacciones. `corrected`: manual → fecha/precisión/canal; desde aceptación → solo fecha/precisión; importadas no se corrigen.
+  Un vínculo erróneo con la invitación se resuelve anulando con motivo y volviendo a inscribir.
+- **Métrica:** Inscriptos = `DISTINCT person_id` con inscripción `voided_at IS NULL`. B4 no crea ni modifica interacciones, participaciones ni asistencias.
+- **Permiso temporal:** `meetings.manage_invitations` (hasta la Fase C) + acceso a la reunión + persona en alcance.
+- **Invariante de integridad (aplicación):** toda mutación de inscripciones operativas pasa por `lib/meetings/registrations.ts` (estado + evento en una transacción); la base no impone que exista el evento. Hay un test sobre el código fuente.
+
 ## 8. Subetapas (aprobación independiente para cada una)
 
 1. **B1** — lectura/UI/conteos: módulo común de métricas, chips de hechos, copy de procedencia, optimización de round trips. Sin migraciones ni escrituras.
 2. **B2** — metadata de invitación/respuesta e historial (0037 + 0038).
 3. **B3** — asistencia, undo real, auditoría y check-in (0039 + 0040).
-4. **B4** — inscripción operativa (0041).
+4. **B4** — inscripción operativa (0041 + 0042).
 5. **B5** — timeline de Persona (actividad separada de contacto).
 6. **B6** — cierre, performance y producción.
 

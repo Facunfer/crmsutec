@@ -60,6 +60,7 @@ async function findLegacyRows(db: Db, sourceSystem: string): Promise<LegacyRow[]
       join meeting_participations mp on mp.id = iel.entity_id
       where ib.source_system = ${sourceSystem} and ib.status = 'applied' and ib.execution_mode = 'apply'
         and mp.participation_kind = 'registration'
+        and mp.voided_at is null
     ),
     existing as (
       select meeting_id, campaign_key, person_id, id from meeting_participations
