@@ -201,9 +201,19 @@ describe("KPIs de participación e interacciones (punto 4: sin doble conteo, rea
     expect(kpis.logicalParticipations).toBeGreaterThanOrEqual(2); // participated + attended, nunca registration/invited
     expect(kpis.uniquePeopleParticipated).toBeGreaterThanOrEqual(2);
     expect(kpis.totalInteractions).toBeGreaterThanOrEqual(2);
-    expect(kpis.uniquePeopleWithInteraction).toBeGreaterThanOrEqual(2);
-    expect(kpis.peopleWithRealLastInteraction).toBeGreaterThanOrEqual(1);
-    expect(kpis.peopleWithReferentialOnlyLastInteraction).toBeGreaterThanOrEqual(1);
+    // B5: las tres interacciones sembradas son DERIVADAS de participación (técnicas): ninguna es contacto real.
+    expect(kpis.technicalInteractions).toBeGreaterThanOrEqual(3);
+    expect(kpis.realContacts).toBe(0);
+    expect(kpis.peopleWithRealContact).toBe(0);
+
+    // Un contacto real explícito (tipo llamada + canal WhatsApp, carga manual) sí cuenta; y suma una sola persona.
+    const call = await db.selectFrom("interaction_types").select("id").where("key", "=", "llamada").executeTakeFirstOrThrow();
+    const wa = await db.selectFrom("interaction_channels").select("id").where("key", "=", "whatsapp").executeTakeFirstOrThrow();
+    await db.insertInto("person_interactions").values({ person_id: p1, owner_organization_id: ownerOrgId, occurred_at: new Date(Date.now() - 3_600_000), occurred_precision: "exact_datetime", date_basis: "actual", interaction_type_id: call.id, channel_id: wa.id, subject: "Llamada", status: "completed", created_by: actor.id } as never).execute();
+    const after = await getParticipationInteractionKpis(actor);
+    expect(after.realContacts).toBe(1);
+    expect(after.peopleWithRealContact).toBe(1);
+    expect(after.technicalInteractions).toBe(kpis.technicalInteractions);
   });
 });
 

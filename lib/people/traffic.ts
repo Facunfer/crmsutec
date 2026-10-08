@@ -1,10 +1,11 @@
 /**
- * Semáforo de personas: se calcula SIEMPRE desde la última interacción real (nunca se guarda un color).
+ * Semáforo de personas: se calcula SIEMPRE desde el ÚLTIMO CONTACTO REAL (regla canónica en lib/contacts/real-contact.ts; nunca se guarda
+ * un color). Participación, asistencia, inscripción, actividad, respuesta a invitaciones e interacciones técnicas heredadas NO cuentan.
  *
  *   verde    0–30 días desde la última interacción
  *   amarillo 31–60 días
  *   rojo     más de 60 días
- *   gris     nunca hubo interacción
+ *   gris     sin contacto registrado (nunca hubo un contacto real)
  *
  * Los días se cuentan en días calendario de Buenos Aires (una interacción `date_only` solo conoce el día).
  * Es un módulo puro (sin base): lo usan la consulta, la UI y los tests, con los mismos umbrales.
@@ -20,7 +21,7 @@ export function isTrafficLight(value: unknown): value is TrafficLight {
   return typeof value === "string" && (TRAFFIC_LIGHTS as readonly string[]).includes(value);
 }
 
-/** `null` = nunca hubo interacción. */
+/** `null` = sin contacto registrado. */
 export function trafficLightOf(daysSinceLastInteraction: number | null): TrafficLight {
   if (daysSinceLastInteraction === null) return "gray";
   if (daysSinceLastInteraction <= TRAFFIC_GREEN_MAX_DAYS) return "green";
@@ -32,5 +33,5 @@ export const TRAFFIC_LABEL: Record<TrafficLight, string> = {
   green: "Últimos 30 días",
   yellow: "Entre 31 y 60 días",
   red: "Más de 60 días",
-  gray: "Nunca interactuamos",
+  gray: "Sin contacto registrado",
 };

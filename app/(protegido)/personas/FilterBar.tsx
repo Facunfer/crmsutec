@@ -91,11 +91,11 @@ export function FilterBar({ areas, orgTree, tags = [] }: { areas: AreaOption[]; 
           <option value="green">Verde (hasta 30 días)</option>
           <option value="yellow">Amarillo (31–60 días)</option>
           <option value="red">Rojo (más de 60 días)</option>
-          <option value="gray">Gris (nunca)</option>
+          <option value="gray">Gris (sin contacto registrado)</option>
         </select>
       </div>
       <div>
-        <label className="block text-xs text-brand-500">Última interacción desde</label>
+        <label className="block text-xs text-brand-500">Último contacto desde</label>
         <input name="lastFrom" type="date" defaultValue={searchParams.get("lastFrom") ?? ""} className={field} />
       </div>
       <div>

@@ -20,8 +20,7 @@ export interface PersonDisplayRow {
   areaName: string | null;
   reparticionName: string | null;
   lastInteractionDate: string | null;
-  /** 'legacy_reference' = fecha técnica de la carga histórica (2026-01-01), nunca una fecha de asistencia comprobada. */
-  lastInteractionBasis: "actual" | "legacy_reference" | null;
+  /** Fecha del ÚLTIMO CONTACTO REAL (null = sin contacto registrado). */
   daysSinceInteraction: number | null;
   trafficLight: TrafficLight;
   status: "active" | "inactive" | "merged";
@@ -87,15 +86,14 @@ export function PeopleGrid({
       { field: "email", headerName: "Email", sortable: false, filter: false, flex: 1 },
       {
         field: "lastInteractionDate",
-        headerName: "Última interacción",
+        headerName: "Último contacto",
         sortable: false,
         filter: false,
         width: 200,
         valueGetter: (p) => {
-          if (!p.data?.lastInteractionDate) return "Nunca";
+          if (!p.data?.lastInteractionDate) return "Sin contacto registrado";
           const fecha = p.data.lastInteractionDate.split("-").reverse().join("/");
-          const dias = `${p.data.daysSinceInteraction} d`;
-          return p.data.lastInteractionBasis === "legacy_reference" ? `Ref. ${fecha} (${dias}) — no comprobada` : `${fecha} (${dias})`;
+          return `${fecha} (${p.data.daysSinceInteraction} d)`;
         },
       },
       { headerName: "Semáforo", width: 110, sortable: false, filter: false, cellRenderer: TrafficCell },

@@ -1,6 +1,7 @@
 import { requirePermission } from "@/lib/auth/guard";
 import { getDashboardCounts, getParticipationInteractionKpis } from "@/lib/analytics/queries";
 import { getTrafficKpis } from "@/lib/people/queries";
+import { RealContactNotice } from "../_components/RealContactNotice";
 
 export default async function DashboardPage() {
   const actor = await requirePermission("dashboard.view");
@@ -53,7 +54,8 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <h2 className="mb-1 mt-8 text-sm font-semibold uppercase tracking-wide text-brand-400">Participación e interacciones</h2>
+      <h2 className="mb-1 mt-8 text-sm font-semibold uppercase tracking-wide text-brand-400">Participación y contacto</h2>
+      <div className="mb-3"><RealContactNotice /></div>
       <p className="mb-3 text-xs text-brand-400">
         Cada número es un concepto distinto: no deberían coincidir entre sí. &quot;Filas físicas&quot; incluye inscripciones que conviven con su participación agregada por la
         carga histórica; &quot;participaciones lógicas&quot; cuenta solo participación real (attended/participated), sin ese doble conteo.
@@ -72,25 +74,25 @@ export default async function DashboardPage() {
           <div className="text-sm text-brand-500">Filas físicas de participación</div>
         </div>
         <div className="rounded-lg bg-white p-4 shadow-sm">
-          <div className="text-2xl font-semibold text-brand-700">{participation.totalInteractions}</div>
-          <div className="text-sm text-brand-500">Interacciones</div>
+          <div className="text-2xl font-semibold text-brand-700">{participation.realContacts}</div>
+          <div className="text-sm text-brand-500">Contactos reales registrados</div>
         </div>
         <div className="rounded-lg bg-white p-4 shadow-sm">
-          <div className="text-2xl font-semibold text-brand-700">{participation.uniquePeopleWithInteraction}</div>
-          <div className="text-sm text-brand-500">Personas con interacción</div>
+          <div className="text-2xl font-semibold text-brand-700">{participation.peopleWithRealContact}</div>
+          <div className="text-sm text-brand-500">Personas con contacto real</div>
         </div>
         <div className="rounded-lg bg-white p-4 shadow-sm">
-          <div className="text-2xl font-semibold text-brand-700">{participation.peopleWithRealLastInteraction}</div>
-          <div className="text-sm text-brand-500">Última interacción con fecha real</div>
+          <div className="text-2xl font-semibold text-brand-400">{participation.technicalInteractions}</div>
+          <div className="text-sm text-brand-500">Interacciones técnicas heredadas (no son contacto)</div>
         </div>
         <div className="rounded-lg bg-white p-4 shadow-sm">
-          <div className="text-2xl font-semibold text-brand-700">{participation.peopleWithReferentialOnlyLastInteraction}</div>
-          <div className="text-sm text-brand-500">Última interacción solo referencial (01/01/2026)</div>
+          <div className="text-2xl font-semibold text-brand-400">{participation.totalInteractions}</div>
+          <div className="text-sm text-brand-500">Interacciones registradas (total técnico)</div>
         </div>
       </div>
 
       <h2 className="mb-1 mt-8 text-sm font-semibold uppercase tracking-wide text-brand-400">Semáforo (personas activas)</h2>
-      <p className="mb-3 text-xs text-brand-400">Se calcula en el momento desde la última interacción: nunca es un color guardado.</p>
+      <p className="mb-3 text-xs text-brand-400">Se calcula en el momento desde el último contacto real: nunca es un color guardado.</p>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-lg bg-white p-4 shadow-sm">
           <div className="text-2xl font-semibold text-estado-ok">{traffic.green}</div>
@@ -106,7 +108,7 @@ export default async function DashboardPage() {
         </div>
         <div className="rounded-lg bg-white p-4 shadow-sm">
           <div className="text-2xl font-semibold text-brand-400">{traffic.gray}</div>
-          <div className="text-sm text-brand-500">Sin interacción nunca</div>
+          <div className="text-sm text-brand-500">Sin contacto registrado</div>
         </div>
       </div>
 

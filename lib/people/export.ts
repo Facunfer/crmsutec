@@ -7,7 +7,7 @@ import { computeDisplayAge, listAllMatching, type PeopleFilterSpec, type PeopleS
 
 assertServerOnly("lib/people/export.ts");
 
-const CSV_HEADER = ["Nombre", "Apellido", "DNI", "Email", "Teléfono", "Área", "Repartición", "Última interacción", "Semáforo", "Edad", "Estado", "Alta"];
+const CSV_HEADER = ["Nombre", "Apellido", "DNI", "Email", "Teléfono", "Área", "Repartición", "Último contacto", "Semáforo", "Edad", "Estado", "Alta"];
 
 const TRAFFIC_CSV: Record<string, string> = { green: "Verde", yellow: "Amarillo", red: "Rojo", gray: "Gris" };
 
@@ -49,7 +49,7 @@ export async function exportPeopleCsv(
         masked.phone ?? "",
         masked.areaName ?? "",
         masked.reparticionName ?? "",
-        masked.lastInteractionDate ? (masked.lastInteractionBasis === "legacy_reference" ? `${masked.lastInteractionDate} (referencial, no comprobada)` : masked.lastInteractionDate) : "",
+        masked.lastInteractionDate ?? "",
         TRAFFIC_CSV[masked.trafficLight] ?? "",
         age !== null ? String(age) : "",
         STATUS_LABEL[masked.status] ?? masked.status,

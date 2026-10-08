@@ -94,12 +94,13 @@ beforeAll(async () => {
 
   // --- interacciones: varias por persona, anuladas, futuras y empates de día; algunas con dueña fuera del alcance
   const itype = (await db.selectFrom("interaction_types").select("id").where("key", "=", "llamada").executeTakeFirstOrThrow()).id;
+  const wchannel = (await db.selectFrom("interaction_channels").select("id").where("key", "=", "whatsapp").executeTakeFirstOrThrow()).id;
   await sql`
-    insert into person_interactions (person_id, owner_organization_id, occurred_at, interaction_type_id, subject, status, created_by, date_basis, void_reason)
+    insert into person_interactions (person_id, owner_organization_id, occurred_at, interaction_type_id, channel_id, subject, status, created_by, date_basis, void_reason)
     select p.id,
            case when k % 5 = 0 then ${sql.lit(O.SUT!)}::uuid else coalesce(p.organization_id, ${sql.lit(O.SUT!)}::uuid) end,
            now() - ((p.rn % 300) || ' days')::interval + (case when k = 3 then interval '1 day' else interval '0' end) * (case when p.rn % 7 = 0 then -40 else 0 end),
-           ${itype}::uuid, 'Llamada',
+           ${itype}::uuid, ${wchannel}::uuid, 'Llamada',
            case when k = 4 and p.rn % 2 = 0 then 'voided' when k = 2 and p.rn % 3 = 0 then 'open' else 'completed' end,
            ${masterId}::uuid,
            'actual',
@@ -303,7 +304,7 @@ describe("propiedades que no pueden cambiar", () => {
     const byId = new Map(all.map((r) => [r.id, r]));
     expect(byId.size).toBe(all.length);
     for (const id of multi) {
-      const expected = (await sql<{ d: string | null }>`select to_char(max((occurred_at at time zone 'America/Argentina/Buenos_Aires')::date), 'YYYY-MM-DD') d from person_interactions where person_id = ${id}::uuid and status in ('open','completed') and occurred_at <= now()`.execute(db)).rows[0]!.d;
+      const expected = (await sql<{ d: string | null }>`select to_char(max((occurred_at at time zone 'America/Argentina/Buenos_Aires')::date), 'YYYY-MM-DD') d from person_interactions where person_id = ${id}::uuid and status = 'completed' and channel_id is not null and date_basis = 'actual' and occurred_at <= now()`.execute(db)).rows[0]!.d;
       expect(byId.get(id)!.lastInteractionDate, id).toBe(expected);
     }
     expect(page.rows.length).toBeGreaterThan(0);

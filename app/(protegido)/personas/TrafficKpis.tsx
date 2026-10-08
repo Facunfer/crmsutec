@@ -22,7 +22,7 @@ export function TrafficKpiCards({ kpis, active, baseQuery }: { kpis: TrafficKpis
     return qs ? `/personas?${qs}` : "/personas";
   };
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Personas por última interacción">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Personas por último contacto real">
       {ORDER.map((light) => {
         const isActive = active === light;
         return (

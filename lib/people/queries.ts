@@ -8,7 +8,8 @@ import { PARTICIPANT_STATUS_LABEL, type ParticipantStatus } from "../meetings/pa
 import { displayOf, loadOrgDisplayNames } from "../organizations/display.js";
 import { TRAFFIC_GREEN_MAX_DAYS, TRAFFIC_YELLOW_MAX_DAYS, trafficLightOf, type TrafficLight } from "./traffic.js";
 import { visibleTagIdsCondition } from "../tags/queries.js";
-import { validInteraction, interactionDay, interactionAgeDays } from "./traffic-sql.js";
+import { interactionDay, interactionAgeDays } from "./traffic-sql.js";
+import { countsAsRealContactSql } from "../contacts/real-contact.js";
 
 assertServerOnly("lib/people/queries.ts");
 
@@ -42,51 +43,44 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const BA = "America/Argentina/Buenos_Aires";
 
 /**
- * Última interacción REAL de la persona: interacciones válidas (abiertas o completadas, no futuras, no anuladas) dentro
- * del alcance del usuario (unidad propietaria de la interacción). Una inscripción NO cuenta: las participaciones entran
- * solo cuando se confirmaron y generaron su interacción (lib/interactions/participation-sync.ts).
+ * ÚLTIMO CONTACTO REAL de la persona (B5): la interacción más reciente que cumple la regla canónica `countsAsRealContact`
+ * (lib/contacts/real-contact.ts). Nada más lo mueve: ni participación, ni asistencia, ni inscripción, ni respuesta a una
+ * invitación, ni una interacción derivada de actividad, ni `legacy_reference`. Sin contacto real → `last_date` NULL (gris,
+ * «Sin contacto registrado»).
  *
- * `basis` (migración 0029): de qué interacción sale la fecha — 'actual' (real) o 'legacy_reference' (fecha técnica
- * 2026-01-01 de la carga histórica, nunca una fecha de asistencia comprobada). Se elige la fila con el día más
- * reciente (ORDER BY...LIMIT 1, no un MAX ciego) para poder devolver también SU basis; en el empate improbable de
- * mismo día, se prefiere 'actual'. La UI nunca debe mostrar una fecha referencial como si fuera real: ver
- * `getPersonTraffic`/`PersonListRow.lastInteractionBasis`.
+ * ALCANCE: lo determina la PERSONA (todas las consultas parten de `applyFilters`, que ya la limita al alcance actual del
+ * usuario). El dueño histórico de la interacción (`owner_organization_id`) NO oculta el hecho: solo puede reservar su detalle
+ * (ver lib/people/timeline.ts).
  */
-function lastInteractionLateral(actor: SessionUser) {
-  return sql<{ last_date: string | null; days: number | null; basis: "actual" | "legacy_reference" | null }>`(
+function lastInteractionLateral(_actor: SessionUser) {
+  return sql<{ last_date: string | null; days: number | null }>`(
     select to_char(m.d, 'YYYY-MM-DD') as last_date,
-           ${interactionAgeDays(sql`m.d`)} as days,
-           m.basis
+           ${interactionAgeDays(sql`m.d`)} as days
     from (
-      select ${interactionDay(sql`pi.occurred_at`)} as d, pi.date_basis as basis
+      select ${interactionDay(sql`pi.occurred_at`)} as d
       from person_interactions pi
       where pi.person_id = people.id
-        and ${validInteraction()}
-        and ${orgScope(actor, "pi.owner_organization_id")}
-      order by 1 desc, (case when pi.date_basis = 'actual' then 0 else 1 end) asc
+        and ${countsAsRealContactSql("pi")}
+      order by 1 desc
       limit 1
     ) m
   )`.as("li");
 }
 
 /**
- * MISMA regla que `lastInteractionLateral` (interacción válida, no futura, dentro del alcance; día más reciente; ante
- * empate de día, 'actual' antes que 'legacy_reference'), pero UNA fila por persona calculada en una sola pasada sobre
- * `person_interactions` (DISTINCT ON) en lugar de una sonda por cada persona. Se usa cuando la consulta necesita la última
- * interacción de MUCHAS personas (filtros de semáforo/fecha, KPIs, exportación). Para las 25 filas de una página se sigue
- * usando el lateral: es más barato que recorrer todas las interacciones.
+ * MISMA regla que `lastInteractionLateral`, pero UNA fila por persona calculada en una sola pasada sobre `person_interactions`
+ * (DISTINCT ON) en lugar de una sonda por cada persona. Se usa cuando la consulta necesita el último contacto de MUCHAS personas
+ * (filtros de semáforo/fecha, KPIs, exportación). Para las filas de una página se sigue usando el lateral.
  */
-function lastInteractionDerived(actor: SessionUser) {
+function lastInteractionDerived(_actor: SessionUser) {
   return sql`(
     select distinct on (pi.person_id)
            pi.person_id as person_id,
            to_char(${interactionDay(sql`pi.occurred_at`)}, 'YYYY-MM-DD') as last_date,
-           ${interactionAgeDays(interactionDay(sql`pi.occurred_at`))} as days,
-           pi.date_basis as basis
+           ${interactionAgeDays(interactionDay(sql`pi.occurred_at`))} as days
     from person_interactions pi
-    where ${validInteraction()}
-      and ${orgScope(actor, "pi.owner_organization_id")}
-    order by pi.person_id, ${interactionDay(sql`pi.occurred_at`)} desc, (case when pi.date_basis = 'actual' then 0 else 1 end) asc
+    where ${countsAsRealContactSql("pi")}
+    order by pi.person_id, ${interactionDay(sql`pi.occurred_at`)} desc
   )`.as("li");
 }
 
@@ -210,11 +204,9 @@ export interface PersonListRow {
   areaName: string | null;
   /** Repartición específica: null cuando la unidad guardada ES el Área (o no hay unidad). */
   reparticionName: string | null;
-  /** Fecha de la última interacción (AAAA-MM-DD, Buenos Aires) y días transcurridos; null si nunca hubo. */
+  /** Fecha del ÚLTIMO CONTACTO REAL (AAAA-MM-DD, Buenos Aires); null = «Sin contacto registrado». (El nombre `lastInteraction*`
+   * se conserva por compatibilidad: desde B5 significa siempre contacto real.) */
   lastInteractionDate: string | null;
-  /** 'actual' = fecha real; 'legacy_reference' = fecha técnica 2026-01-01 de la carga histórica (NUNCA una fecha de
-   * asistencia comprobada — la UI debe rotularla como referencial, nunca mostrarla como si fuera real). */
-  lastInteractionBasis: "actual" | "legacy_reference" | null;
   daysSinceInteraction: number | null;
   trafficLight: TrafficLight;
   createdAt: Date;
@@ -245,7 +237,6 @@ function toListRow(r: any, names: ReadonlyMap<string, string>): PersonListRow {
     areaName: displayOf(names, r.area_id, r.area_name),
     reparticionName: r.reparticion_name === null || r.reparticion_name === undefined ? null : displayOf(names, r.unit_id, r.reparticion_name),
     lastInteractionDate: r.last_interaction_date ?? null,
-    lastInteractionBasis: r.last_interaction_basis ?? null,
     daysSinceInteraction: days,
     trafficLight: trafficLightOf(days),
     createdAt: r.created_at,
@@ -274,7 +265,6 @@ const extraColumns = () => [
   sql<string | null>`case when organizations.parent_id is null then null else organizations.name end`.as("reparticion_name"),
   sql<string | null>`li.last_date`.as("last_interaction_date"),
   sql<number | null>`li.days`.as("days"),
-  sql<"actual" | "legacy_reference" | null>`li.basis`.as("last_interaction_basis"),
 ];
 
 export interface TrafficKpis {
@@ -369,7 +359,7 @@ export async function listAllMatching(
   return (rows as any[]).map((r) => toListRow(r, names));
 }
 
-export interface PersonDetail extends Omit<PersonListRow, "lastInteractionDate" | "lastInteractionBasis" | "daysSinceInteraction" | "trafficLight"> {
+export interface PersonDetail extends Omit<PersonListRow, "lastInteractionDate" | "daysSinceInteraction" | "trafficLight"> {
   organizationId: string | null;
   nameSplitStatus: "split" | "unsplit";
   customFields: Record<string, unknown>;
@@ -479,7 +469,11 @@ export interface PersonMeetingActivityRow {
   datePrecision: "exact_datetime" | "date_only" | null;
 }
 
-/** Actividad histórica y futura: un estado efectivo por jornada o campaña, dentro del alcance. */
+/**
+ * @deprecated desde B5: la ficha usa la línea de tiempo (`lib/people/timeline.ts`). Colapsa los hechos en un único estado por
+ * jornada; se conserva solo por compatibilidad con consumidores y tests existentes.
+ * Actividad histórica y futura: un estado efectivo por jornada o campaña, dentro del alcance.
+ */
 export async function getPersonMeetingActivity(actor: SessionUser, personId: string): Promise<PersonMeetingActivityRow[]> {
   if (!(await canAccessPerson(actor, personId))) return [];
 
@@ -567,26 +561,21 @@ export function computeDisplayAge(person: {
   return { age: null, estimated: false };
 }
 
-/** Semáforo de UNA persona (misma definición que la grilla): null si no existe o está fuera del alcance. `lastInteractionBasis`
- * distingue fecha real de la fecha técnica de referencia (2026-01-01): la UI nunca debe mostrar esta última como si
- * fuera una fecha de asistencia comprobada. */
+/** Semáforo de UNA persona (misma definición que la grilla, desde el ÚLTIMO CONTACTO REAL): null si no existe o está fuera del
+ * alcance. Sin contacto real → gris («Sin contacto registrado»); nunca se muestra una fecha técnica como sustituto. */
 export async function getPersonTraffic(
   actor: SessionUser,
   personId: string
-): Promise<{ lastInteractionDate: string | null; lastInteractionBasis: "actual" | "legacy_reference" | null; daysSinceInteraction: number | null; trafficLight: TrafficLight } | null> {
+): Promise<{ lastInteractionDate: string | null; daysSinceInteraction: number | null; trafficLight: TrafficLight } | null> {
   if (!isUuid(personId)) return null;
   const db = await getDb();
-  // Una sola persona: se sonda su última interacción con el lateral (no hace falta calcularla para todas).
+  // Una sola persona: se sonda su último contacto real con el lateral (no hace falta calcularlo para todas).
   const row = await (applyFilters(db, actor, { status: "all" }) as any)
     .leftJoinLateral(lastInteractionLateral(actor), (join: any) => join.onTrue())
     .where("people.id", "=", personId)
-    .select([
-      sql<string | null>`li.last_date`.as("last_date"),
-      sql<number | null>`li.days`.as("days"),
-      sql<"actual" | "legacy_reference" | null>`li.basis`.as("basis"),
-    ])
+    .select([sql<string | null>`li.last_date`.as("last_date"), sql<number | null>`li.days`.as("days")])
     .executeTakeFirst();
   if (!row) return null;
   const days = row.days === null || row.days === undefined ? null : Number(row.days);
-  return { lastInteractionDate: row.last_date ?? null, lastInteractionBasis: row.basis ?? null, daysSinceInteraction: days, trafficLight: trafficLightOf(days) };
+  return { lastInteractionDate: row.last_date ?? null, daysSinceInteraction: days, trafficLight: trafficLightOf(days) };
 }

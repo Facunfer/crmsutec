@@ -4,6 +4,7 @@ import { assertServerOnly } from "../server-only.js";
 import { isOverdueUnclosed, STATUS_LABEL, type MeetingStatus } from "../meetings/state-machine.js";
 import type { SessionUser } from "../permissions/can.js";
 import { orgScope } from "../scope/organizations.js";
+import { countsAsRealContactSql, isParticipationDerivedSql } from "../contacts/real-contact.js";
 import { listUsersInScope } from "../users/administration.js";
 
 assertServerOnly("lib/analytics/queries.ts");
@@ -381,13 +382,13 @@ export interface ParticipationInteractionKpis {
    * como si fueran participaciones — evita el doble conteo entre 'registration' y su 'participated' agregada. */
   logicalParticipations: number;
   uniquePeopleParticipated: number;
-  /** person_interactions válidas (abiertas o completadas) en el alcance. */
+  /** MÉTRICA TÉCNICA: person_interactions válidas (abiertas o completadas) en el alcance, de cualquier origen. */
   totalInteractions: number;
-  uniquePeopleWithInteraction: number;
-  /** Personas cuya interacción MÁS RECIENTE es real (date_basis='actual'). */
-  peopleWithRealLastInteraction: number;
-  /** Personas cuya interacción más reciente es SOLO la fecha técnica de referencia (nunca tuvieron una real después). */
-  peopleWithReferentialOnlyLastInteraction: number;
+  /** Interacciones heredadas/derivadas de una participación (espejo técnico de «Participó»): NO son contacto. */
+  technicalInteractions: number;
+  /** Contactos reales (regla canónica `countsAsRealContact`, lib/contacts/real-contact.ts) y personas distintas con alguno. */
+  realContacts: number;
+  peopleWithRealContact: number;
 }
 
 /**
@@ -399,7 +400,7 @@ export async function getParticipationInteractionKpis(actor: SessionUser): Promi
   const db = await getDb();
   const peopleScope = orgScope(actor, "p.organization_id");
 
-  const [physical, logical, interactions, basis] = await Promise.all([
+  const [physical, logical, interactions] = await Promise.all([
     sql<{ n: number }>`
       select count(*)::int as n
       from meeting_participations mp
@@ -412,23 +413,15 @@ export async function getParticipationInteractionKpis(actor: SessionUser): Promi
       join people p on p.id = mp.person_id
       where mp.participation_kind in ('attended', 'participated') and ${peopleScope}
     `.execute(db),
-    sql<{ n: number; people: number }>`
-      select count(*)::int as n, count(distinct pi.person_id)::int as people
+    // El alcance lo da la PERSONA (no el dueño histórico de la interacción). «Contacto real» sale SOLO de la regla canónica.
+    sql<{ n: number; technical: number; real: number; people_real: number }>`
+      select count(*)::int as n,
+             (count(*) filter (where ${isParticipationDerivedSql("pi")}))::int as technical,
+             (count(*) filter (where ${countsAsRealContactSql("pi")}))::int as real,
+             (count(distinct pi.person_id) filter (where ${countsAsRealContactSql("pi")}))::int as people_real
       from person_interactions pi
       join people p on p.id = pi.person_id
       where pi.status in ('open', 'completed') and ${peopleScope}
-    `.execute(db),
-    sql<{ real_count: number; referential_only_count: number }>`
-      with li as (
-        select p.id,
-          (select pi.date_basis from person_interactions pi
-           where pi.person_id = p.id and pi.status in ('open', 'completed')
-           order by pi.occurred_at desc limit 1) as basis
-        from people p where ${peopleScope}
-      )
-      select count(*) filter (where basis = 'actual')::int as real_count,
-             count(*) filter (where basis = 'legacy_reference')::int as referential_only_count
-      from li
     `.execute(db),
   ]);
 
@@ -437,8 +430,8 @@ export async function getParticipationInteractionKpis(actor: SessionUser): Promi
     logicalParticipations: logical.rows[0]?.n ?? 0,
     uniquePeopleParticipated: logical.rows[0]?.people ?? 0,
     totalInteractions: interactions.rows[0]?.n ?? 0,
-    uniquePeopleWithInteraction: interactions.rows[0]?.people ?? 0,
-    peopleWithRealLastInteraction: basis.rows[0]?.real_count ?? 0,
-    peopleWithReferentialOnlyLastInteraction: basis.rows[0]?.referential_only_count ?? 0,
+    technicalInteractions: interactions.rows[0]?.technical ?? 0,
+    realContacts: interactions.rows[0]?.real ?? 0,
+    peopleWithRealContact: interactions.rows[0]?.people_real ?? 0,
   };
 }

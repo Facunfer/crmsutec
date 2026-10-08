@@ -11,6 +11,7 @@ import { isUuid } from "@/lib/scope/organizations";
 import { FilterBar } from "./FilterBar";
 import { PeopleGrid, type PersonDisplayRow } from "./PeopleGrid";
 import { TrafficKpiCards } from "./TrafficKpis";
+import { RealContactNotice } from "../_components/RealContactNotice";
 
 const PAGE_SIZE = 20;
 
@@ -69,7 +70,6 @@ export default async function PersonasPage({
       areaName: row.areaName,
       reparticionName: row.reparticionName,
       lastInteractionDate: row.lastInteractionDate,
-      lastInteractionBasis: row.lastInteractionBasis,
       daysSinceInteraction: row.daysSinceInteraction,
       trafficLight: row.trafficLight,
       status: masked.status,
@@ -106,6 +106,8 @@ export default async function PersonasPage({
           </Link>
         ) : null}
       </div>
+
+      <RealContactNotice />
 
       <TrafficKpiCards kpis={kpis} active={filter.trafficLight} baseQuery={baseParams.toString()} />
 

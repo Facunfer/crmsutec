@@ -172,13 +172,25 @@ Los escritores heredados de `attendance_status` (`commands.ts`, `manual.ts`, `ch
 - **Permiso temporal:** `meetings.manage_invitations` (hasta la Fase C) + acceso a la reunión + persona en alcance.
 - **Invariante de integridad (aplicación):** toda mutación de inscripciones operativas pasa por `lib/meetings/registrations.ts` (estado + evento en una transacción); la base no impone que exista el evento. Hay un test sobre el código fuente.
 
+### 7.5 B5 — timeline de Persona y contacto real (reglas aprobadas e implementadas; SIN migración)
+
+- **Contacto real (única definición):** `countsAsRealContact` en `lib/contacts/real-contact.ts` (SQL + espejo TS, mismo resultado verificado por test). Interacción explícita `completed`, ya ocurrida, `date_basis='actual'`, origen permitido (carga manual `source_key IS NULL` o namespace reservado `communication:*`), canal comunicacional (presencial, teléfono, correo, WhatsApp, SMS) y tipo ≠ `participation`. Nunca cuentan: actividad, participación, inscripción, asistencia, respuesta a invitación (tampoco por WhatsApp o enlace público), interacciones técnicas heredadas, `legacy_reference`, `source_business_rule`, `created_at`.
+- **Las 1.120 interacciones heredadas** (100 % espejo de `participated/legacy_initial_import`) se conservan intactas y quedan fuera de contacto real; no son líneas del timeline (ya existe «Participación»); solo Master las ve, en un detalle técnico fuera del timeline.
+- **Último contacto** = la interacción de contacto real más reciente (día BA). **Última actividad** = hecho vigente con fecha real más reciente de cualquier categoría (excluye actos administrativos, anuladas/revocadas/retiradas, futuras, sin fecha). Una asistencia reciente mueve la actividad, nunca el contacto.
+- **Semáforo** exclusivamente desde el último contacto real (30/60 días); sin contacto → **gris «Sin contacto registrado»**. Al desplegar B5 las 179.631 personas quedan en gris hasta que la Fase F registre comunicaciones. Dashboard y /personas llevan un aviso contextual.
+- **Scope:** el HECHO lo determina la persona actual (`canAccessPerson`); el dueño histórico de una interacción (`owner_organization_id`) solo puede reservar el DETALLE (asunto/nota/resultado/responsable), que además exige `interactions.view`. Operadores y motivos solo con permiso de gestión. Actividades de otras unidades sin acceso: «Actividad de otra unidad».
+- **Sanitización:** los títulos se arman con vocabularios cerrados; el texto libre pasa por `sanitizeFreeText` (DNI, teléfono, email) sin `people.view_sensitive`.
+- **Timeline:** `lib/people/timeline.ts`. Una línea por hecho (inscripción y asistencia desde su fila; invitación/respuesta desde sus eventos; históricos sin eventos desde la fila) + actos administrativos (retirada/reinvitación, anulación/restauración, revocación/restauración, cambio real de respuesta). `corrected` queda como detalle. Fecha = la del hecho; sin fecha → «Eventos sin fecha registrada» al final (nunca `created_at`/importación/`legacy_reference`). Un solo `UNION ALL`, cursor estable `(fecha desc, rango, ref)`, filtros por categoría, sin vistas ni materialized views.
+- **Contrato para la Fase F (no implementado):** `sent/delivered/opened/clicked` son señales y no implican por sí solos una conversación real; `failed/bounced/unsubscribed` nunca son contacto; la respuesta a invitación por `public_link` nunca se convierte automáticamente en contacto; posible acción explícita «Registrar como contacto». Campos previstos: dirección, canal canónico (`whatsapp, email, sms, phone, in_person, other` ↔ catálogo de interacciones), outcome/estado, fecha de ocurrencia (+ precisión, incl. desconocida), operador, campaña/reunión opcional, nota y referente futuro. No se agregó ninguna columna en B5.
+- **Migración 0043:** evaluada y **NO creada**: el índice parcial de contacto real no dio mejora medible a volúmenes realistas, y un trigger de coherencia no es necesario (la regla ya excluye de forma conservadora cualquier fila con marca de derivada).
+
 ## 8. Subetapas (aprobación independiente para cada una)
 
 1. **B1** — lectura/UI/conteos: módulo común de métricas, chips de hechos, copy de procedencia, optimización de round trips. Sin migraciones ni escrituras.
 2. **B2** — metadata de invitación/respuesta e historial (0037 + 0038).
 3. **B3** — asistencia, undo real, auditoría y check-in (0039 + 0040).
 4. **B4** — inscripción operativa (0041 + 0042).
-5. **B5** — timeline de Persona (actividad separada de contacto).
+5. **B5** — timeline de Persona y definición de contacto real (sin migración).
 6. **B6** — cierre, performance y producción.
 
 ## 9. Riesgos

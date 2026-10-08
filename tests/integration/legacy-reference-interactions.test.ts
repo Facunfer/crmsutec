@@ -316,7 +316,9 @@ describe("legacy:reconcile-interactions", () => {
     // jornada real más adelante, o tuvo una interacción nueva del CRM). La fecha 2026-01-01 nunca se sobrescribe:
     // se agrega una fila nueva, como en todo el resto del sistema (append-only).
     const personCampaign = await db.selectFrom("meeting_participations").select("person_id").where("id", "=", participationCampaign).executeTakeFirstOrThrow();
-    const typeRow = await sql<{ id: string }>`select id from interaction_types where key='participation'`.execute(db);
+    // B5: un CONTACTO REAL es una interacción explícita (tipo no derivado + canal comunicacional), no una derivada de participación.
+    const typeRow = await sql<{ id: string }>`select id from interaction_types where key='llamada'`.execute(db);
+    const channelRow = await sql<{ id: string }>`select id from interaction_channels where key='whatsapp'`.execute(db);
     await db
       .insertInto("person_interactions")
       .values({
@@ -326,6 +328,7 @@ describe("legacy:reconcile-interactions", () => {
         occurred_precision: "exact_datetime",
         date_basis: "actual",
         interaction_type_id: typeRow.rows[0]!.id,
+        channel_id: channelRow.rows[0]!.id,
         subject: "Interacción real posterior",
         status: "completed",
         created_by: userId,
@@ -344,11 +347,12 @@ describe("legacy:reconcile-interactions", () => {
     const actor = { id: userId, roleKey: "MASTER_GLOBAL" } as any;
     const trafficNow = await getPersonTraffic(actor, personCampaign.person_id);
     expect(trafficNow?.trafficLight).toBe("green");
-    // La interacción REAL más reciente manda: la ficha ya no debe rotular la fecha como referencial.
-    expect(trafficNow?.lastInteractionBasis).toBe("actual");
+    // El contacto real es el que manda (B5): la fecha es la de ese contacto, nunca la técnica 2026-01-01.
+    expect(trafficNow?.lastInteractionDate).not.toBe(LEGACY_REFERENCE_DATE);
+    expect(trafficNow?.lastInteractionDate).not.toBeNull();
   });
 
-  it("PUNTO 6 (ficha/grilla/export): una persona con SOLO una interacción referencial nunca se muestra como si tuviera una fecha real comprobada", async () => {
+  it("B5 (ficha/grilla/export): una persona con SOLO una interacción referencial/técnica NO tiene contacto: «Sin contacto registrado», gris, sin fecha técnica", async () => {
     const db = await getDb();
     const { getPersonTraffic, listPeoplePage } = await import("../../lib/people/queries.js");
     const { exportPeopleCsv } = await import("../../lib/people/export.js");
@@ -358,15 +362,17 @@ describe("legacy:reconcile-interactions", () => {
     const personUnknown = await db.selectFrom("meeting_participations").select("person_id").where("id", "=", participationUnknown).executeTakeFirstOrThrow();
 
     const traffic = await getPersonTraffic(actor, personUnknown.person_id);
-    expect(traffic?.lastInteractionDate).toBe(LEGACY_REFERENCE_DATE);
-    expect(traffic?.lastInteractionBasis).toBe("legacy_reference"); // NUNCA "actual" para esta persona
+    // La interacción existe (trazabilidad) pero NO es contacto real: no hay último contacto ni fecha técnica como sustituto.
+    expect(traffic?.lastInteractionDate).toBeNull();
+    expect(traffic?.trafficLight).toBe("gray");
 
     const page = await listPeoplePage(actor, { status: "all" }, { field: "name", direction: "asc" }, 1, 200);
     const row = page.rows.find((r) => r.id === personUnknown.person_id);
-    expect(row?.lastInteractionBasis).toBe("legacy_reference");
+    expect(row?.lastInteractionDate).toBeNull();
+    expect(row?.trafficLight).toBe("gray");
 
     const csv = await exportPeopleCsv(actor, { status: "all" }, { field: "name", direction: "asc" });
-    expect(csv).toContain("referencial, no comprobada"); // el export tampoco la presenta como fecha real
+    expect(csv).not.toContain(LEGACY_REFERENCE_DATE); // el export tampoco la presenta como fecha de contacto
   });
 
   it("una participación efectiva tiene como máximo UNA interacción activa: el índice único de source_key lo garantiza a nivel de base, no solo por ON CONFLICT de la app", async () => {

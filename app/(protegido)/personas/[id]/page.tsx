@@ -5,7 +5,6 @@ import {
   computeDisplayAge,
   getPersonById,
   getPersonFormSubmissions,
-  getPersonMeetingActivity,
   getPersonTraffic,
   listPersonObservations,
 } from "@/lib/people/queries";
@@ -17,6 +16,12 @@ import { PersonForm, type PersonFormInitialValues } from "../PersonForm";
 import { TransferPanel } from "./TransferPanel";
 import { updatePersonAction } from "../acciones";
 import { PersonActions } from "./PersonActions";
+import { RelationshipCards } from "./RelationshipCards";
+import { PersonTimeline } from "./PersonTimeline";
+import { getPersonRelationship, getPersonTechnicalInteractions, getPersonTimeline } from "@/lib/people/timeline";
+import { toClientPage } from "@/lib/people/timeline-client";
+import { isMasterGlobal } from "@/lib/permissions/can";
+import { RealContactNotice } from "../../_components/RealContactNotice";
 
 function formatDate(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", { dateStyle: "short" }).format(date);
@@ -30,16 +35,6 @@ const OBSERVATION_LABEL: Record<string, string> = {
   colegio_votacion: "Colegio donde vota",
 };
 
-const RESPONSE_LABEL: Record<string, string> = {
-  pending: "pendiente",
-  confirmed: "sí",
-  declined: "no",
-};
-const ATTENDANCE_LABEL: Record<string, string> = {
-  unknown: "—",
-  attended: "sí",
-  absent: "no",
-};
 
 export default async function PersonaFichaPage({ params }: { params: Promise<{ id: string }> }) {
   const actor = await requirePermission("people.view");
@@ -52,22 +47,17 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
   const masked = applyMasking(person, canSeeSensitive);
   const { age, estimated } = computeDisplayAge(person);
 
-  const [orgTree, meetingActivity, formSubmissions, traffic, personTags, observations] = await Promise.all([
+  const [orgTree, relationship, timeline, technical, formSubmissions, traffic, personTags, observations] = await Promise.all([
     listOrgTreeOptions(actor),
-    getPersonMeetingActivity(actor, id),
+    getPersonRelationship(actor, id),
+    getPersonTimeline(actor, id, { limit: 30 }),
+    isMasterGlobal(actor) ? getPersonTechnicalInteractions(actor, id) : Promise.resolve([]),
     getPersonFormSubmissions(actor, id),
     getPersonTraffic(actor, id),
     can(actor, "tags.view") ? listPersonTags(actor, id) : Promise.resolve([]),
     listPersonObservations(actor, id),
   ]);
   const areas = await listAreaOptions(actor, orgTree);
-
-  // Provisional (el rediseño integral es B5). Denominador EXPLÍCITO: invitaciones vigentes a reuniones FINALIZADAS. Numerador:
-  // las que tienen asistencia VIGENTE (una revocada no cuenta). No se habla de «ausentes»: la falta de check-in no es una ausencia
-  // comprobada, y las actividades históricas sin invitaciones no entran en el cálculo.
-  const invitedFinished = meetingActivity.filter((m) => m.invited && m.meetingStatus === "finished");
-  const attendedCount = invitedFinished.filter((m) => m.attended).length;
-  const finishedInvitations = invitedFinished.length;
 
   const initialValues: PersonFormInitialValues = {
     firstName: person.firstName,
@@ -123,10 +113,8 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
               <TrafficBadge light={traffic.trafficLight} />
               <span>
                 {traffic.lastInteractionDate
-                  ? traffic.lastInteractionBasis === "legacy_reference"
-                    ? `Fecha de referencia: ${traffic.lastInteractionDate} (carga histórica, no es una fecha de asistencia comprobada — hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
-                    : `Última interacción: ${traffic.lastInteractionDate} (hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
-                  : "Nunca interactuamos"}
+                  ? `Último contacto: ${traffic.lastInteractionDate.split("-").reverse().join("/")} (hace ${traffic.daysSinceInteraction} día${traffic.daysSinceInteraction === 1 ? "" : "s"})`
+                  : "Sin contacto registrado"}
               </span>
             </p>
           ) : null}
@@ -167,45 +155,21 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
         )}
       </section>
 
+      {relationship ? (
+        <section className="rounded-lg bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold text-brand-900">Estado de relación</h2>
+          <RelationshipCards relationship={relationship} />
+          <div className="mt-3"><RealContactNotice /></div>
+        </section>
+      ) : null}
+
       <section className="rounded-lg bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold text-brand-900">Actividad</h2>
-        <div className="mb-3 flex gap-6 text-sm text-brand-700">
-          <span>{meetingActivity.length} actividad(es)</span>
-          <span>{formSubmissions.length} formulario(s) completados</span>
-          {finishedInvitations > 0 ? (
-            <span title="Cuenta solo las invitaciones vigentes a reuniones finalizadas; no implica que quienes no figuran hayan estado ausentes.">
-              Asistió a {attendedCount} de {finishedInvitations} invitaciones a reuniones finalizadas
-            </span>
-          ) : null}
-        </div>
+        <h2 className="mb-3 text-sm font-semibold text-brand-900">Línea de tiempo</h2>
+        {timeline ? <PersonTimeline personId={id} initial={toClientPage(timeline)} /> : <p className="text-sm text-brand-400">No se pudo cargar la línea de tiempo.</p>}
+      </section>
 
-        {meetingActivity.length > 0 ? (
-          <table className="mb-4 w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-brand-100 text-xs uppercase text-brand-400">
-                <th className="py-1.5 pr-4">Reunión</th>
-                <th className="py-1.5 pr-4">Fecha</th>
-                <th className="py-1.5 pr-4">Invitado</th>
-                <th className="py-1.5 pr-4">Confirmó</th>
-                <th className="py-1.5 pr-4">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {meetingActivity.map((m) => (
-                <tr key={m.meetingId} className="border-b border-brand-50">
-                  <td className="py-1.5 pr-4">{m.meetingName}</td>
-                  <td className="py-1.5 pr-4">{m.startsAt ? new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeZone: "America/Argentina/Buenos_Aires", ...(m.datePrecision === "exact_datetime" ? { timeStyle: "short" as const } : {}) }).format(m.startsAt) : "Fecha pendiente"}</td>
-                  <td className="py-1.5 pr-4">{m.invited ? "sí" : "—"}</td>
-                  <td className="py-1.5 pr-4">{RESPONSE_LABEL[m.responseStatus] ?? m.responseStatus}</td>
-                  <td className="py-1.5 pr-4">{m.statusLabel}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="mb-4 text-sm text-brand-400">Todavía no tiene actividades registradas.</p>
-        )}
-
+      <section className="rounded-lg bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold text-brand-900">Formularios</h2>
         {formSubmissions.length === 0 ? (
           <p className="text-sm text-brand-400">Todavía no completó ningún formulario.</p>
         ) : (
@@ -218,6 +182,24 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
           </ul>
         )}
       </section>
+
+      {technical.length > 0 ? (
+        <details className="rounded-lg bg-white p-4 text-sm shadow-sm">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-brand-400">
+            Interacciones técnicas heredadas ({technical.length}) — solo Master, no son contacto
+          </summary>
+          <p className="mt-2 text-xs text-brand-400">
+            Espejo técnico de participaciones históricas, conservado para trazabilidad. Ya figuran como «Participación» en la línea de tiempo.
+          </p>
+          <ul className="mt-2 space-y-1 text-xs text-brand-600">
+            {technical.map((t) => (
+              <li key={t.id}>
+                {t.dateBasis === "legacy_reference" ? "Fecha técnica de referencia" : "Fecha de la actividad"} {t.occurredAt.toISOString().slice(0, 10)} · {t.subject} · {t.sourceKey}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }

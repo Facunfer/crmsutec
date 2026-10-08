@@ -105,11 +105,13 @@ beforeAll(async () => {
   await person("sinOrg", "60000008", null);
 
   const interactionType = (await db.selectFrom("interaction_types").select("id").where("key", "=", "llamada").executeTakeFirstOrThrow()).id;
+  // B5: un contacto real exige canal comunicacional (WhatsApp) y tipo no derivado de actividad.
+  const whatsappChannel = (await db.selectFrom("interaction_channels").select("id").where("key", "=", "whatsapp").executeTakeFirstOrThrow()).id;
   const interact = async (personKey: string, occurredAt: Date, extra: Record<string, unknown> = {}) => {
     const p = await db.selectFrom("people").select("organization_id").where("id", "=", P[personKey]!).executeTakeFirstOrThrow();
     await db
       .insertInto("person_interactions")
-      .values({ person_id: P[personKey]!, owner_organization_id: p.organization_id ?? sutecbaOwner, occurred_at: occurredAt, interaction_type_id: interactionType, subject: "Llamada", status: "completed", created_by: masterId, ...extra } as never)
+      .values({ person_id: P[personKey]!, owner_organization_id: p.organization_id ?? sutecbaOwner, occurred_at: occurredAt, interaction_type_id: interactionType, channel_id: whatsappChannel, subject: "Llamada", status: "completed", created_by: masterId, ...extra } as never)
       .execute();
   };
   await interact("cRaiz", daysAgo(3)); // verde
@@ -374,13 +376,13 @@ describe("Interacción automática por participación real (idempotente)", () =>
     expect((await db.selectFrom("person_interactions").select("id").execute()).length).toBe(before);
   });
 
-  it("la interacción de participación entra al semáforo con la fecha de la actividad", async () => {
-    // La actividad fue el 2026-03-10: cTeatro2 pasa de 'rojo por una llamada vieja' a la fecha más reciente entre ambas.
+  it("B5: la interacción de participación NO entra al semáforo (es el espejo técnico de «Participó», no un contacto)", async () => {
+    // cTeatro2 tiene una llamada de hace 200 días (contacto real) y una interacción derivada de la actividad del 2026-03-10:
+    // el último contacto sigue siendo la llamada vieja; la participación no lo mueve.
     const t = await getPersonTraffic(master, P.cTeatro2!);
     expect(t?.lastInteractionDate).not.toBeNull();
-    // Una participación futura respecto de hoy no existe: la fecha es la mayor entre la llamada (hace 200 días) y la actividad.
-    const days = t!.daysSinceInteraction!;
-    expect(days).toBeLessThanOrEqual(200);
+    expect(t!.daysSinceInteraction!).toBeGreaterThanOrEqual(199);
+    expect(t!.daysSinceInteraction!).toBeLessThanOrEqual(201);
   });
 
   it("una fecha desconocida no inventa nada: al tener fecha, la interacción se genera sin duplicar", async () => {

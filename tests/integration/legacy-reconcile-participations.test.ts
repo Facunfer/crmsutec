@@ -189,7 +189,8 @@ describe("legacy:reconcile-participations", () => {
     expect(after.trafficBefore).toEqual(projected.trafficAfter);
     const { getPersonTraffic } = await import("../../lib/people/queries.js");
     const actor = { id: userId, roleKey: "MASTER_GLOBAL" } as any;
-    expect((await getPersonTraffic(actor, original.person_id))?.trafficLight).toBe("yellow");
+    // B5: la operación histórica creó la interacción técnica, pero ésta NO es contacto real: la app la ve en gris.
+    expect((await getPersonTraffic(actor, original.person_id))?.trafficLight).toBe("gray");
     await db.updateTable("person_interactions").set({ status: "voided", void_reason: "Prueba de proyección" }).where("person_id", "=", original.person_id).execute();
     expect((await planLegacyReconciliation(db, {})).trafficAfter).toEqual({ green: 0, yellow: 0, red: 0, gray: 2 });
     expect((await getPersonTraffic(actor, original.person_id))?.trafficLight).toBe("gray");
