@@ -53,6 +53,14 @@ const EXPECTED: Record<ModuleKey, string[]> = {
     "meetings.manage_invitations",
     "meetings.attendance_manual",
   ],
+  mailing: [
+    "mailing.view",
+    "mailing.create",
+    "mailing.send",
+    "mailing.manage_senders",
+    "mailing.view_metrics",
+    "mailing.manage_suppressions",
+  ],
   formularios: [
     "forms.view",
     "forms.create",

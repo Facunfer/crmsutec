@@ -32,10 +32,13 @@
     "legacy:reconcile-participations": "tsx scripts/legacy-reconcile-participations.ts",
     "legacy:reconcile-interactions": "tsx scripts/reconcile-legacy-reference-interactions.ts",
     "legacy:preview-interactions": "tsx scripts/preview-legacy-reference-interactions.ts",
+    "mail:worker": "tsx scripts/mail-worker.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1149.0",
+    "@aws-sdk/client-sqs": "^3.1149.0",
     "@electric-sql/pglite": "^0.5.8",
     "ag-grid-community": "^36.1.0",
     "ag-grid-react": "^36.1.0",

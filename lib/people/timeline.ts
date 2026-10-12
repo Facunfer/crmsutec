@@ -27,16 +27,20 @@ assertServerOnly("lib/people/timeline.ts");
  *    fecha de importación ni legacy_reference.
  *  - Ninguna categoría excepto `contact` puede contar como contacto real, y solo si cumple `countsAsRealContact`.
  *  - Todo texto libre pasa por `sanitizeFreeText`; los títulos se arman con vocabularios cerrados, nunca con texto libre.
+ *  - MAILING (M6): una línea AGRUPADA por campaña («Mailing — nombre») con sus estados (enviado · entregado · abierto · click). Es un
+ *    hecho propio y NUNCA cuenta como contacto real (`countsAsContact = false`): no mueve el semáforo ni «Último contacto», no es
+ *    «Última actividad» y no crea interacciones. Solo lo ve quien tiene `mailing.view`.
  */
 
-export type TimelineCategory = "contact" | "invitation" | "registration" | "participation" | "attendance";
-export const TIMELINE_CATEGORIES: readonly TimelineCategory[] = ["contact", "invitation", "registration", "participation", "attendance"];
+export type TimelineCategory = "contact" | "invitation" | "registration" | "participation" | "attendance" | "mailing";
+export const TIMELINE_CATEGORIES: readonly TimelineCategory[] = ["contact", "invitation", "registration", "participation", "attendance", "mailing"];
 export const TIMELINE_CATEGORY_LABEL: Record<TimelineCategory, string> = {
   contact: "Contactos",
   invitation: "Invitaciones",
   registration: "Inscripciones",
   participation: "Actividades",
   attendance: "Asistencia",
+  mailing: "Mailing",
 };
 export function isTimelineCategory(value: unknown): value is TimelineCategory {
   return typeof value === "string" && (TIMELINE_CATEGORIES as readonly string[]).includes(value);
@@ -211,6 +215,19 @@ function timelineCte({ actor, personId }: Ctx): RawBuilder<unknown> {
     left join interaction_channels ch on ch.id = pi.channel_id
     left join meetings m on m.id = pi.meeting_id
     where pi.person_id = ${p} and pi.status in ('open', 'completed') and not ${isParticipationDerivedSql("pi")}
+    union all
+    -- MAILING: una línea por campaña (el destinatario es el email; varias personas pueden compartirlo). NUNCA cuenta como contacto.
+    select 'mailing', 'campaign', 80, 'mail:' || r.id::text, coalesce(r.sent_at, r.queued_at), 'exact_datetime',
+           null::text, null::text, null::text, null::timestamptz, null::text,
+           null::uuid, null, null, false, false, false,
+           jsonb_build_object('status', r.status, 'campaignName', c.name, 'sentAt', r.sent_at, 'deliveredAt', r.delivered_at,
+                              'openedAt', r.opened_at, 'clickedAt', r.clicked_at, 'bouncedAt', r.bounced_at, 'complainedAt', r.complained_at,
+                              'unsubscribedAt', r.unsubscribed_at, 'failedAt', r.failed_at, 'shared', r.person_count > 1)
+    from mailing_campaign_recipient_people rp
+    join mailing_campaign_recipients r on r.id = rp.recipient_id
+    join mailing_campaigns c on c.id = r.campaign_id
+    where rp.person_id = ${p} and ${sql.lit(can(actor, "mailing.view"))}
+      and r.status not in ('pending', 'invalid', 'suppressed')
   )`;
 }
 
@@ -343,6 +360,21 @@ function toEvent(r: Row, v: Viewer): TimelineEvent {
       }
       break;
     }
+    case "mailing": {
+      const name = typeof x.campaignName === "string" ? sanitizeFreeText(x.campaignName, v.sensitive) : null;
+      title = `Mailing — ${name ?? "campaña"}`;
+      const steps: Array<[string, unknown]> = [
+        ["Enviado", x.sentAt], ["Entregado", x.deliveredAt], ["Abierto", x.openedAt], ["Click", x.clickedAt],
+        ["Rebotó", x.bouncedAt], ["Queja", x.complainedAt], ["Se dio de baja", x.unsubscribedAt], ["Falló", x.failedAt],
+      ];
+      const done = steps.filter(([, at]) => typeof at === "string");
+      description = done.length > 0 ? done.map(([label]) => label).join(" · ") : x.status === "queued" ? "En cola" : x.status === "send_unknown" ? "Envío incierto" : null;
+      for (const [label, at] of done) details.push(`${label}: ${formatTimelineDate(at as string, "exact_datetime")}`);
+      if (x.shared) details.push("Email compartido con otra persona: se envió un solo mensaje");
+      provenance.push("Un mailing no cuenta como contacto real");
+      origin = "correo masivo";
+      break;
+    }
     case "contact": {
       const ch = r.channel ? CHANNEL_LABEL[r.channel] ?? "otro canal" : "sin canal";
       if (r.counts_contact) {
@@ -394,7 +426,7 @@ export interface TimelineOptions {
   limit?: number;
 }
 
-const emptyCounts = (): Record<TimelineCategory, number> => ({ contact: 0, invitation: 0, registration: 0, participation: 0, attendance: 0 });
+const emptyCounts = (): Record<TimelineCategory, number> => ({ contact: 0, invitation: 0, registration: 0, participation: 0, attendance: 0, mailing: 0 });
 
 export async function getPersonTimeline(actor: SessionUser, personId: string, options: TimelineOptions = {}): Promise<TimelinePage | null> {
   if (!isUuid(personId)) return null;

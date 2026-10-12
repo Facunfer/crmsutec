@@ -123,6 +123,7 @@ export default async function PersonasPage({
         canExport={can(actor, "people.export")}
         canDeactivate={can(actor, "people.deactivate")}
         canAddToAssociation={can(actor, "associations.manage_members")}
+        canCreateMailing={can(actor, "mailing.create") && can(actor, "people.view")}
         associations={activeAssociations.map((a) => ({ id: a.id, name: a.name }))}
         exportQueryString={exportParams.toString()}
       />

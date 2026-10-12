@@ -64,13 +64,14 @@ describe("catálogo de permisos (D5)", () => {
     expect(new Set(permissionKeys).size).toBe(permissionKeys.length);
   });
 
-  it("los 10 módulos esperados existen, con su orden", () => {
+  it("los 11 módulos esperados existen, con su orden", () => {
     expect(MODULES.map((m) => [m.key, m.sortOrder])).toEqual([
       ["dashboard", 10],
       ["personas", 20],
       ["asociaciones", 30],
       ["reuniones", 40],
       ["formularios", 50],
+      ["mailing", 55],
       ["visualizacion", 60],
       ["interacciones", 70],
       ["importaciones", 80],

@@ -63,7 +63,7 @@ describe("seed (catálogo → base)", () => {
     expect(first.permissions).toHaveLength(PERMISSIONS.length);
   });
 
-  it("los 10 módulos esperados existen y están activos", () => {
+  it("los 11 módulos esperados existen y están activos", () => {
     expect(first.modules.map((m) => m.key).sort()).toEqual(MODULES.map((m) => m.key).sort());
     expect(first.modules.every((m) => m.active)).toBe(true);
   });

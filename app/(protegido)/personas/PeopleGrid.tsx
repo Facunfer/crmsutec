@@ -7,6 +7,7 @@ import { DataGrid } from "@/components/grid/DataGrid";
 import type { PeopleFilterSpec, PeopleSort } from "@/lib/people/queries";
 import type { TrafficLight } from "@/lib/people/traffic";
 import { bulkAddToAssociationAction, bulkSetActiveAction } from "./acciones";
+import { AudiencePanel } from "../mailing/AudiencePanel";
 import { TrafficBadge } from "./TrafficBadge";
 
 export interface PersonDisplayRow {
@@ -51,6 +52,7 @@ export function PeopleGrid({
   canExport,
   canDeactivate,
   canAddToAssociation,
+  canCreateMailing = false,
   associations,
   exportQueryString,
 }: {
@@ -63,6 +65,7 @@ export function PeopleGrid({
   canExport: boolean;
   canDeactivate: boolean;
   canAddToAssociation: boolean;
+  canCreateMailing?: boolean;
   associations: Array<{ id: string; name: string }>;
   exportQueryString: string;
 }) {
@@ -73,6 +76,7 @@ export function PeopleGrid({
   const [selectAllMatching, setSelectAllMatching] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [bulkPending, setBulkPending] = useState(false);
+  const [mailingOpen, setMailingOpen] = useState(false);
   const [targetAssociationId, setTargetAssociationId] = useState("");
 
   const columnDefs = useMemo<ColDef<PersonDisplayRow>[]>(
@@ -239,6 +243,11 @@ export function PeopleGrid({
               </button>
             </span>
           ) : null}
+          {canCreateMailing ? (
+            <button type="button" className="rounded-md bg-brand-600 px-2 py-1 text-xs text-white hover:bg-brand-700" onClick={() => setMailingOpen(true)}>
+              Crear mailing
+            </button>
+          ) : null}
           <button
             type="button"
             className="text-brand-400 hover:underline"
@@ -252,6 +261,13 @@ export function PeopleGrid({
         </div>
       ) : null}
       {bulkMessage ? <p className="text-sm text-brand-600">{bulkMessage}</p> : null}
+      {mailingOpen && canCreateMailing && selectionCount > 0 ? (
+        <AudiencePanel
+          selection={selectAllMatching ? { mode: "filter", filter } : { mode: "ids", ids: [...selectedIds] }}
+          defaultName={`Mailing ${new Date().toLocaleDateString("es-AR")}`}
+          onClose={() => setMailingOpen(false)}
+        />
+      ) : null}
 
       <DataGrid<PersonDisplayRow>
         columnDefs={columnDefs}

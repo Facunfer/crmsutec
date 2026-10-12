@@ -274,3 +274,22 @@ la respuesta; repetir «Inscribir» no crea una segunda fila ni restaura una anu
 
 ## Fuera de F1 (siguientes fases)
 Pantallas operativas (bandeja «sin vincular», botón «Inscribir», estadísticas), importación CSV, campaña/reunión desde la reunión, timeline «Formularios», Mailing completo.
+
+
+---
+
+# Mailing MVP con Amazon SES (IMPLEMENTADO en local, sin commit)
+
+Ver el runbook operativo en `docs/MAILING-SES-RUNBOOK.md`. Resumen técnico:
+
+- **Migración 0044 `mailing_mvp`** (aditiva, idempotente): `mailing_senders`, `mailing_campaigns`, `mailing_campaign_batches`,
+  `mailing_campaign_recipients`, `mailing_campaign_recipient_people`, `mailing_suppressions`, `mailing_events` (append-only),
+  `mailing_daily_quota`, `mailing_worker_heartbeats`. RLS, sin DELETE para `sutecba_app`. **Prefijo `mailing_` y no `email_`**: la guarda
+  `assertNoForeignFootprint` (lib/db/guards.ts) trata cualquier tabla `email_*` como huella de otro sistema y aborta migrate/seed.
+- **Dominio**: `lib/mailing/*` — audiencia (AudienceSpec resuelto en servidor, snapshot set-based), campañas (borrador → lista → lanzada, pausa/
+  reanudar/cancelar), remitentes, cuota global atómica, worker (`FOR UPDATE SKIP LOCKED`, lease, `send_unknown`), eventos SES (SQS), bajas
+  firmadas (HMAC), plantillas con sanitizado de HTML y variables escapadas.
+- **B5**: el mailing aparece en el timeline como UNA línea por campaña (categoría `mailing`, `countsAsContact = false`); nunca escribe
+  interacciones ni mueve semáforo/«Último contacto»/«Última actividad».
+- **Permisos** (módulo nuevo `mailing`): `mailing.view`, `.create`, `.send`, `.manage_senders`, `.view_metrics`, `.manage_suppressions`.
+  ADMIN: todos. OPERADOR: view, create, view_metrics (prepara y prueba; NO lanza). LECTURA: view, view_metrics. REUNIONES: ninguno. **Decisión provisional, a revisar en la Fase C.**

@@ -579,3 +579,6 @@ export async function getPersonTraffic(
   const days = row.days === null || row.days === undefined ? null : Number(row.days);
   return { lastInteractionDate: row.last_date ?? null, daysSinceInteraction: days, trafficLight: trafficLightOf(days) };
 }
+
+/** Consulta base de personas visibles + filtros (misma que la grilla). La usa el Mailing para congelar audiencias set-based. */
+export { applyFilters as buildPeopleFilterQuery };
