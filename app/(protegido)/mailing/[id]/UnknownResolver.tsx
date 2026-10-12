@@ -11,7 +11,7 @@ export function UnknownResolver({ campaignId, recipientId }: { campaignId: strin
   const [error, setError] = useState<string | null>(null);
 
   function run(action: "requeue" | "mark_failed") {
-    if (action === "requeue" && !window.confirm("Si SES ya había enviado el mensaje, la persona lo recibirá dos veces. ¿Reencolar igual?")) return;
+    if (action === "requeue" && !window.confirm("Reencolar puede generar un envío duplicado si el proveedor recibió el mensaje original. ¿Reencolar igual?")) return;
     startTransition(async () => {
       const r = await resolveUnknownAction(campaignId, recipientId, action);
       if (r.ok) router.refresh();

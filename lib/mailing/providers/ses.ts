@@ -42,6 +42,8 @@ export function classifySesError(err: unknown): SendOutcome {
   if (DEFINITE_REJECTIONS.has(name)) return { kind: "rejected", code: name, message, retryable: false };
   // 4xx con respuesta del servicio y falla del cliente: el servicio no procesó el envío.
   const status = e.$metadata?.httpStatusCode;
+  // 429 = límite de ritmo, aunque el SDK no haya podido tipar el error: el mensaje no salió y reintentar es seguro.
+  if (status === 429) return { kind: "rejected", code: name, message, retryable: true };
   if (e.$fault === "client" && typeof status === "number" && status >= 400 && status < 500) {
     return { kind: "rejected", code: name, message, retryable: false };
   }

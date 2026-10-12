@@ -43,6 +43,19 @@ export interface CycleStats {
   quotaExhausted: boolean;
 }
 
+/**
+ * Registro operativo opcional (lo conecta scripts/mail-worker.ts). Cada línea lleva ids (campaña, destinatario, worker, id de mensaje del
+ * proveedor, intento, código de error) y NUNCA emails, cuerpos, tokens ni secretos.
+ */
+type WorkerLogger = (message: string, fields: Record<string, unknown>) => void;
+let logger: WorkerLogger | null = null;
+export function setWorkerLogger(fn: WorkerLogger | null): void {
+  logger = fn;
+}
+const logEvent: WorkerLogger = (message, fields) => logger?.(message, fields);
+/** Para el bucle del worker (mismo registro operativo). */
+export const workerLog: WorkerLogger = logEvent;
+
 const emptyStats = (): CycleStats => ({ claimed: 0, sent: 0, rejected: 0, failed: 0, unknown: 0, suppressed: 0, requeued: 0, quotaExhausted: false });
 
 /** Rechazos que afectan a TODA la cuenta/identidad, no a un destinatario: se pausa la campaña en vez de fallar uno por uno. */
@@ -59,7 +72,6 @@ const ACCOUNT_LEVEL_CODES = new Set([
   "CredentialsError",
   "CredentialProviderError",
 ]);
-const MAX_THROTTLE_ATTEMPTS = 5;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Reclamo (cuota + SKIP LOCKED en una transacción)
@@ -164,6 +176,7 @@ async function recordOutcome(workerId: string, r: ClaimedRecipient, outcome: Sen
        where id = ${r.id}::uuid and status in ('sending', 'send_unknown')`.execute(db);
     if (r.batchId) await sql`update mailing_campaign_batches set sent_count = sent_count + 1 where id = ${r.batchId}::uuid`.execute(db);
     stats.sent += 1;
+    logEvent("envío aceptado", { workerId, campaignId: r.campaignId, recipientId: r.id, batchId: r.batchId, providerMessageId: outcome.messageId, attempt: r.attemptCount });
     return;
   }
 
@@ -175,12 +188,14 @@ async function recordOutcome(workerId: string, r: ClaimedRecipient, outcome: Sen
              status_detail = 'Respuesta incierta de SES: requiere revisión', lease_owner = null, lease_until = null, updated_at = now()
        where id = ${r.id}::uuid and status = 'sending'`.execute(db);
     stats.unknown += 1;
+    logEvent("envío incierto (no se reintenta)", { workerId, campaignId: r.campaignId, recipientId: r.id, attempt: r.attemptCount, errorCode: outcome.code });
     return;
   }
 
   // rejected: SES garantiza que NO envió → se libera la cuota.
   await releaseQuota(db, 1, today);
   stats.rejected += 1;
+  logEvent("envío rechazado", { workerId, campaignId: r.campaignId, recipientId: r.id, attempt: r.attemptCount, errorCode: outcome.code, retryable: outcome.retryable });
   if (ACCOUNT_LEVEL_CODES.has(outcome.code)) {
     await db.transaction().execute(async (trx) => {
       await sql`
@@ -194,7 +209,9 @@ async function recordOutcome(workerId: string, r: ClaimedRecipient, outcome: Sen
     stats.requeued += 1;
     return;
   }
-  if (outcome.retryable && r.attemptCount < MAX_THROTTLE_ATTEMPTS) {
+  // Rechazo por ritmo/cuota (429, throttling): SES garantiza que NO envió, así que se reencola con backoff (30 s, 60 s … tope 15 min)
+  // y NUNCA pasa a `failed` por insistir: mientras el proveedor limite, espera. La cuota ya se devolvió arriba.
+  if (outcome.retryable) {
     await sql`
       update mailing_campaign_recipients
          set status = 'queued', next_attempt_at = now() + make_interval(secs => ${backoffSeconds(r.attemptCount)}),
@@ -283,11 +300,12 @@ export async function runSendCycle(
 /** Lease vencido en `sending` → `send_unknown` (jamás se reencola: puede haber salido). */
 export async function recoverExpiredLeases(): Promise<number> {
   const db = await getDb();
-  const r = await sql<{ id: string }>`
+  const r = await sql<{ id: string; campaign_id: string }>`
     update mailing_campaign_recipients
        set status = 'send_unknown', last_error = 'lease_expired', status_detail = 'Lease vencido: no se sabe si SES aceptó. Requiere revisión',
            lease_owner = null, lease_until = null, updated_at = now()
-     where status = 'sending' and lease_until < now() returning id`.execute(db);
+     where status = 'sending' and lease_until < now() returning id, campaign_id`.execute(db);
+  for (const row of r.rows) logEvent("lease vencido → send_unknown", { campaignId: row.campaign_id, recipientId: row.id });
   return r.rows.length;
 }
 
@@ -316,6 +334,27 @@ export async function heartbeat(workerId: string, startedAt: Date, info: Record<
     insert into mailing_worker_heartbeats (worker_id, started_at, last_seen_at, info)
     values (${workerId}, ${startedAt}, now(), ${JSON.stringify(info)}::jsonb)
     on conflict (worker_id) do update set last_seen_at = now(), info = excluded.info`.execute(db);
+}
+
+/** Mantenimiento best-effort: borra latidos de workers que no se ven hace más de 24 h. Nunca lanza. */
+export async function pruneHeartbeats(): Promise<number> {
+  try {
+    const db = await getDb();
+    const r = await sql<{ worker_id: string }>`delete from mailing_worker_heartbeats where last_seen_at < now() - interval '24 hours' returning worker_id`.execute(db);
+    return r.rows.length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Apagado limpio: el latido propio se retira para que la UI vea «no activo» enseguida. Best-effort. */
+export async function removeHeartbeat(workerId: string): Promise<void> {
+  try {
+    const db = await getDb();
+    await sql`delete from mailing_worker_heartbeats where worker_id = ${workerId}`.execute(db);
+  } catch {
+    // sin latido: no es crítico
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

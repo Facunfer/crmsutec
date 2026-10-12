@@ -25,6 +25,8 @@ const campaigns = await import("../../lib/mailing/campaigns.js");
 const senders = await import("../../lib/mailing/senders.js");
 const audience = await import("../../lib/mailing/audience.js");
 const worker = await import("../../lib/mailing/worker.js");
+const { runWorkerLoop } = await import("../../lib/mailing/worker-loop.js");
+const { loadMailConfig } = await import("../../lib/mailing/config.js");
 const events = await import("../../lib/mailing/events.js");
 const supp = await import("../../lib/mailing/suppressions.js");
 const queries = await import("../../lib/mailing/queries.js");
@@ -46,10 +48,12 @@ class FakeProvider {
   readonly name = "ses" as const;
   calls: Array<{ to: string; subject: string; html: string; text: string; headers?: Record<string, string>; from: string }> = [];
   overrides = new Map<string, any>();
+  onSend: (() => void) | null = null;
   sandbox = false;
   identity: "verified" | "pending" | "failed" | "unknown" = "verified";
   private n = 0;
   async send(message: any) {
+    this.onSend?.();
     this.calls.push({ to: message.to, subject: message.subject, html: message.html, text: message.text, headers: message.headers, from: message.from });
     const o = this.overrides.get(message.to);
     if (o) return o;
@@ -770,6 +774,91 @@ describe("seguridad", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
+describe("worker: 429 sostenido, registro operativo, apagado limpio y mantenimiento", () => {
+  it("429 sostenido: nunca pasa a failed, devuelve la cuota, incrementa el intento y se envía al recuperarse", async () => {
+    const c = await launched(1);
+    const [r] = await recipients(c.id);
+    provider.overrides.set(r!.normalized_email, { kind: "rejected", code: "TooManyRequestsException", message: "slow", retryable: true });
+    const day = freshDay();
+    for (let i = 0; i < 7; i += 1) {
+      const s = await worker.runSendCycle("w429", { provider: provider as never, today: day });
+      expect(s).toMatchObject({ sent: 0, rejected: 1, requeued: 1, failed: 0 });
+      await sql`update mailing_campaign_recipients set next_attempt_at = null where id = ${r!.id}::uuid`.execute(await getDb());
+    }
+    const [after] = await sql1(sql<{ status: string; attempt_count: number; last_error: string | null }>`select status, attempt_count, last_error from mailing_campaign_recipients where id = ${r!.id}::uuid`);
+    expect(after).toMatchObject({ status: "queued", attempt_count: 7, last_error: "TooManyRequestsException" });
+    expect((await sql1(sql<{ reserved: number }>`select reserved from mailing_daily_quota where day = ${day}::date`))[0]!.reserved).toBe(0);
+    provider.overrides.delete(r!.normalized_email);
+    expect((await worker.runSendCycle("w429", { provider: provider as never, today: day })).sent).toBe(1);
+    expect((await recipients(c.id))[0]!.provider_message_id).toBeTruthy();
+  });
+
+  it("registro operativo: ids y códigos, nunca emails, cuerpos ni tokens", async () => {
+    const lines: Array<{ message: string; fields: Record<string, unknown> }> = [];
+    worker.setWorkerLogger((message, fields) => lines.push({ message, fields }));
+    try {
+      const c = await launched(2);
+      const rows = await recipients(c.id);
+      provider.overrides.set(rows[1]!.normalized_email, { kind: "rejected", code: "MessageRejected", message: `Email ${rows[1]!.normalized_email} not verified`, retryable: false });
+      await worker.runSendCycle("wlog", { provider: provider as never, today: freshDay() });
+      const ok = lines.find((l) => l.message === "envío aceptado")!;
+      expect(ok.fields).toMatchObject({ workerId: "wlog", campaignId: c.id, attempt: 1 });
+      expect(typeof ok.fields.recipientId).toBe("string");
+      expect(String(ok.fields.providerMessageId)).toMatch(/^fake-/);
+      const bad = lines.find((l) => l.message === "envío rechazado")!;
+      expect(bad.fields).toMatchObject({ workerId: "wlog", campaignId: c.id, errorCode: "MessageRejected", retryable: false });
+      const blob = JSON.stringify(lines);
+      for (const r of rows) expect(blob).not.toContain(r.normalized_email);
+      expect(blob).not.toMatch(/@|unsubscribe|Hola|<p>|List-Unsubscribe|secret/i);
+    } finally {
+      worker.setWorkerLogger(null);
+    }
+  });
+
+  it("apagado limpio: tras la señal no reclama más, termina lo reclamado y retira su latido", async () => {
+    const c = await launched(40);
+    await worker.heartbeat("wstop", new Date(), {});
+    let stop = false;
+    provider.onSend = () => {
+      stop = true; // llega SIGTERM en pleno ciclo
+    };
+    const { cycles } = await runWorkerLoop({
+      workerId: "wstop", startedAt: new Date(), config: loadMailConfig(), blockingIssues: [], queue: null,
+      isStopping: () => stop, provider: provider as never, idleMs: 20, busyMs: 5,
+    });
+    expect(cycles).toBe(1);
+    const counts = await statusCounts(c.id);
+    // se terminó TODO lo reclamado (nada queda en `sending`) y el resto sigue en cola sin reclamar
+    expect(counts.sending ?? 0).toBe(0);
+    expect(counts.sent).toBe(16);
+    expect(counts.queued).toBe(24);
+    expect(provider.calls).toHaveLength(16);
+    expect((await sql1(sql<{ n: number }>`select count(*)::int n from mailing_worker_heartbeats where worker_id = 'wstop'`))[0]!.n).toBe(0);
+    // y una vez detenido no vuelve a reclamar nada por su cuenta
+    expect((await worker.runSendCycle("wotro", { provider: provider as never, today: freshDay() })).claimed).toBeGreaterThan(0); // otro worker sí puede
+  });
+
+  it("poda de latidos: borra los de más de 24 h y conserva los recientes", async () => {
+    const db = await getDb();
+    await sql`insert into mailing_worker_heartbeats (worker_id, started_at, last_seen_at) values ('viejo-a', now() - interval '3 days', now() - interval '25 hours'), ('reciente', now() - interval '1 hour', now() - interval '5 minutes')`.execute(db);
+    expect(await worker.pruneHeartbeats()).toBeGreaterThanOrEqual(1);
+    const left = (await sql1(sql<{ worker_id: string }>`select worker_id from mailing_worker_heartbeats where worker_id in ('viejo-a', 'reciente')`)).map((r) => r.worker_id);
+    expect(left).toEqual(["reciente"]);
+  });
+});
+
+describe("clasificación de errores de SES", () => {
+  it("429 sin tipo => rechazo reintentable; timeout/5xx => incierto; credenciales/cuenta => rechazo definitivo", async () => {
+    const { classifySesError } = await import("../../lib/mailing/providers/ses.js");
+    expect(classifySesError({ name: "Unknown", $fault: "client", $metadata: { httpStatusCode: 429 } })).toMatchObject({ kind: "rejected", retryable: true });
+    expect(classifySesError({ name: "TooManyRequestsException" })).toMatchObject({ kind: "rejected", retryable: true });
+    expect(classifySesError({ name: "TimeoutError" })).toMatchObject({ kind: "unknown" });
+    expect(classifySesError({ name: "InternalFailure", $fault: "server", $metadata: { httpStatusCode: 500 } })).toMatchObject({ kind: "unknown" });
+    expect(classifySesError({ name: "CredentialsProviderError" })).toMatchObject({ kind: "rejected", retryable: false });
+    expect(classifySesError({ name: "MessageRejected" })).toMatchObject({ kind: "rejected", retryable: false });
+  });
+});
+
 describe("prueba y reparto en lotes", () => {
   it("el correo de prueba usa el remitente elegido, no toca estados ni cuota y rechaza emails inválidos", async () => {
     const c = await newCampaign(2);

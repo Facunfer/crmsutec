@@ -304,6 +304,7 @@ GRANT SELECT, INSERT ON TABLE public.mailing_suppressions TO sutecba_app;
 GRANT UPDATE (lifted_at, lifted_by, lift_reason) ON TABLE public.mailing_suppressions TO sutecba_app;
 GRANT SELECT, INSERT ON TABLE public.mailing_events TO sutecba_app;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.mailing_daily_quota TO sutecba_app;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.mailing_worker_heartbeats TO sutecba_app;
+-- Único DELETE de mailing: el worker poda latidos viejos (> 24 h) y retira el propio al apagarse. Es solo telemetría operativa.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.mailing_worker_heartbeats TO sutecba_app;
 
 COMMIT;

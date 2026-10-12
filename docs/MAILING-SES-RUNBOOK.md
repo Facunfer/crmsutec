@@ -81,6 +81,10 @@ pm2 save
 pm2 logs sutecba-mail --lines 100
 ```
 
+El worker se lanza directo con `node --import tsx scripts/mail-worker.ts` (un solo proceso, sin `npm` ni wrapper): PM2 le manda SIGTERM al worker mismo.
+**Apagado limpio** (`pm2 stop|restart sutecba-mail`): deja de reclamar, termina el ciclo en vuelo persistiendo cada resultado (segundos; `kill_timeout` es 30 s), retira su latido y sale. Si muere de golpe, lo reclamado pasa a «Envío incierto» y no se reenvía solo.
+Los latidos de más de 24 h se podan solos (mantenimiento best-effort del propio worker).
+
 El worker no abre puertos, usa el mismo rol `sutecba_app` y el mismo `.env`. Si falta configuración bloqueante (`AWS_REGION`, `MAIL_UNSUBSCRIBE_SECRET`, `PUBLIC_BASE_URL`, `MAIL_DAILY_SEND_LIMIT`) arranca, loguea qué falta y **no envía**.
 
 ## 5. Probar (de menor a mayor riesgo)
@@ -105,7 +109,8 @@ El worker no abre puertos, usa el mismo rol `sutecba_app` y el mismo `.env`. Si 
 - **Eventos que no llegan:** ver que `SES_EVENTS_QUEUE_URL` esté seteado, que la cola tenga mensajes (consola SQS) y la DLQ. Un evento que llega antes de que se guarde el envío se reintenta solo hasta 5 veces.
 - **Errores de envío:** en la tabla de destinatarios, columna *Detalle* (código del proveedor; nunca el cuerpo ni datos personales). `MessageRejected` en sandbox = destinatario no verificado.
 - **Rechazo a nivel cuenta** (`AccountSuspended`, `SendingPaused`, identidad no verificada): el worker **pausa la campaña** con el motivo y no consume cuota.
-- **Logs:** JSON por línea (`campaña`, ids, intento, código de error). No se loguean secretos, tokens, cuerpos ni emails.
+- **Logs:** JSON por línea. Cada envío lleva `workerId`, `campaignId`, `recipientId`, `providerMessageId`, `attempt` y `errorCode`. No se loguean secretos, tokens, cuerpos, emails ni connection strings.
+- **Rechazo por ritmo (HTTP 429 / throttling):** el destinatario vuelve a la cola con espera creciente (30 s … 15 min), devuelve la cuota y **nunca** pasa a «Fallido» por insistir.
 
 ## 7. Roles y permisos (decisión PROVISIONAL, a revisar en la Fase C)
 
