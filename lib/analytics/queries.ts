@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import { isOverdueUnclosed, STATUS_LABEL, type MeetingStatus } from "../meetings/state-machine.js";
+
 import type { SessionUser } from "../permissions/can.js";
 import { orgScope } from "../scope/organizations.js";
 import { countsAsRealContactSql, isParticipationDerivedSql } from "../contacts/real-contact.js";
@@ -192,6 +192,30 @@ export async function getAssociationsAnalytics(actor: SessionUser): Promise<Asso
   };
 }
 
+/** Etiquetas del gráfico «Por estado» de reuniones (en el orden del ciclo de vida). `overdue_unclosed` es derivado, no un estado guardado. */
+export const MEETING_STATUS_CHART_ORDER = ["draft", "scheduled", "in_progress", "finished", "cancelled"] as const;
+export const MEETING_STATUS_CHART_LABEL: Record<string, string> = {
+  draft: "Borrador",
+  scheduled: "Programado",
+  in_progress: "En curso",
+  finished: "Finalizado",
+  cancelled: "Cancelado",
+  overdue_unclosed: "Vencido sin cerrar",
+};
+
+/** Agrupa por estado mostrado: SIEMPRE los cinco estados (aunque valgan 0) y, si existe, el derivado «vencido sin cerrar». Nunca inventa ni oculta. */
+export function buildMeetingStatusSeries(meetings: ReadonlyArray<{ status: string; ends_at: Date | null }>, now: number = Date.now()): Serie[] {
+  const counts = new Map<string, number>();
+  for (const m of meetings) {
+    const overdue = (m.status === "scheduled" || m.status === "in_progress") && m.ends_at !== null && m.ends_at.getTime() < now;
+    const display = overdue ? "overdue_unclosed" : m.status;
+    counts.set(display, (counts.get(display) ?? 0) + 1);
+  }
+  const keys: string[] = [...MEETING_STATUS_CHART_ORDER];
+  for (const k of counts.keys()) if (!keys.includes(k)) keys.push(k);
+  return keys.map((k) => ({ nombre: MEETING_STATUS_CHART_LABEL[k] ?? k, valor: counts.get(k) ?? 0 }));
+}
+
 export interface MeetingsAnalytics {
   total: number;
   byStatus: Serie[];
@@ -233,11 +257,6 @@ export async function getMeetingsAnalytics(actor: SessionUser): Promise<Meetings
       .executeTakeFirstOrThrow(),
   ]);
 
-  const displayStatusCounts = new Map<string, number>();
-  for (const m of meetings) {
-    const display = isOverdueUnclosed(m.status, m.ends_at) ? "overdue_unclosed" : m.status;
-    displayStatusCounts.set(display, (displayStatusCounts.get(display) ?? 0) + 1);
-  }
 
   const invited = invitationRows.reduce((acc, r) => acc + Number(r.count), 0);
   const confirmed = invitationRows.find((r) => r.response_status === "confirmed")?.count ?? 0;
@@ -247,10 +266,7 @@ export async function getMeetingsAnalytics(actor: SessionUser): Promise<Meetings
 
   return {
     total: meetings.length,
-    byStatus: [...displayStatusCounts.entries()].map(([status, count]) => ({
-      nombre: STATUS_LABEL[status as MeetingStatus] ?? status,
-      valor: count,
-    })),
+    byStatus: buildMeetingStatusSeries(meetings),
     monthly: fillMonthlySeries(new Map(monthRows.map((r) => [r.month, Number(r.count)]))),
     invited,
     confirmed: Number(confirmed),

@@ -11,6 +11,7 @@ export function FilterBar({ areas, orgTree, tags = [] }: { areas: AreaOption[]; 
   const formRef = useRef<HTMLFormElement>(null);
   const [areaId, setAreaId] = useState(searchParams.get("area") ?? "");
   const [repId, setRepId] = useState(searchParams.get("rep") ?? "");
+  const selectedTags = useMemo(() => new Set(searchParams.getAll("tag")), [searchParams]);
 
   // Repartición dependiente: solo las unidades DENTRO del Área elegida (con su camino, para entender la jerarquía).
   const units = useMemo(() => orgTree.filter((o) => o.areaId === areaId && o.depth > 0), [orgTree, areaId]);
@@ -19,10 +20,14 @@ export function FilterBar({ areas, orgTree, tags = [] }: { areas: AreaOption[]; 
     if (!formRef.current) return;
     const data = new FormData(formRef.current);
     const params = new URLSearchParams();
-    for (const key of ["q", "tag", "area", "rep", "traffic", "lastFrom", "lastTo", "status", "ageMin", "ageMax"]) {
+    for (const key of ["q", "area", "rep", "traffic", "lastFrom", "lastTo", "status", "ageMin", "ageMax", "email", "phone"]) {
       const value = String(data.get(key) ?? "").trim();
       if (value) params.set(key, value);
     }
+    // Etiquetas: varias (checkbox); `tagMatch` solo importa con más de una.
+    const tagValues = data.getAll("tag").map(String).filter(Boolean);
+    for (const t of tagValues) params.append("tag", t);
+    if (tagValues.length > 1 && data.get("tagMatch") === "all") params.set("tagMatch", "all");
     router.push(`/personas?${params.toString()}`);
   }
 
@@ -42,18 +47,38 @@ export function FilterBar({ areas, orgTree, tags = [] }: { areas: AreaOption[]; 
         <input name="q" defaultValue={searchParams.get("q") ?? ""} placeholder="nombre, apellido, DNI, email, teléfono" className={`${field} w-56`} />
       </div>
       {tags.length > 0 ? (
-        <div>
-          <label className="block text-xs text-brand-500">Etiqueta</label>
-          <select name="tag" defaultValue={searchParams.get("tag") ?? ""} className={field}>
-            <option value="">— todas —</option>
+        <fieldset className="max-w-xs">
+          <legend className="block text-xs text-brand-500">Etiquetas</legend>
+          <div className="mt-1 max-h-24 overflow-y-auto rounded-md border border-brand-200 px-2 py-1 text-sm">
             {tags.map((t) => (
-              <option key={t.id} value={t.id}>
+              <label key={t.id} className="flex items-center gap-1.5">
+                <input type="checkbox" name="tag" value={t.id} defaultChecked={selectedTags.has(t.id)} />
                 {t.name}
-              </option>
+              </label>
             ))}
+          </div>
+          <select name="tagMatch" defaultValue={searchParams.get("tagMatch") === "all" ? "all" : "any"} className="mt-1 rounded-md border border-brand-200 px-2 py-1 text-xs">
+            <option value="any">con cualquiera de las elegidas</option>
+            <option value="all">con todas las elegidas</option>
           </select>
-        </div>
+        </fieldset>
       ) : null}
+      <div>
+        <label className="block text-xs text-brand-500">Email</label>
+        <select name="email" defaultValue={searchParams.get("email") ?? ""} className={field}>
+          <option value="">— todos —</option>
+          <option value="with">Con email</option>
+          <option value="without">Sin email</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs text-brand-500">Teléfono</label>
+        <select name="phone" defaultValue={searchParams.get("phone") ?? ""} className={field}>
+          <option value="">— todos —</option>
+          <option value="with">Con teléfono</option>
+          <option value="without">Sin teléfono</option>
+        </select>
+      </div>
       <div>
         <label className="block text-xs text-brand-500">Área</label>
         <select

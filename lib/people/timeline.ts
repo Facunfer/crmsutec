@@ -345,8 +345,16 @@ function toEvent(r: Row, v: Viewer): TimelineEvent {
     }
     case "participation": {
       const basis = (x.basis ?? "standard") as keyof typeof BASIS_COPY;
-      title = x.participationKind === "attended" ? "Participación con evidencia registrada" : BASIS_COPY[basis] ?? "Participación";
+      // «Participó en <actividad>»: el hecho real, sin fecha inventada (la fecha de la actividad o «Fecha no registrada»). NO es contacto.
+      const what = activityName ? sanitizeFreeText(activityName, v.sensitive) : null;
+      title = !what
+        ? "Participó en una actividad"
+        : r.act_type === "campaign"
+          ? `Participó en la campaña ${what}`
+          : `Participó en ${what}`;
+      provenance.push(x.participationKind === "attended" ? "Participación con evidencia registrada" : BASIS_COPY[basis] ?? "Participación");
       provenance.push(x.imported ? "Según listado importado" : "Registrada en el sistema");
+      provenance.push("Una participación no cuenta como contacto");
       break;
     }
     case "attendance": {

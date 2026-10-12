@@ -2,50 +2,35 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { getTrafficKpis, listPeoplePage, type PeopleFilterSpec, type PeopleSort } from "@/lib/people/queries";
-import { isTrafficLight } from "@/lib/people/traffic";
+import { paramReaderFromRecord, parsePeopleFilter, peopleFilterToParams } from "@/lib/people/filter-params";
 import { applyMasking } from "@/lib/people/masking";
 import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
 import { listAssociations } from "@/lib/associations/queries";
 import { listTagNamesForPeople, listVisibleTags } from "@/lib/tags/queries";
-import { isUuid } from "@/lib/scope/organizations";
 import { FilterBar } from "./FilterBar";
 import { PeopleGrid, type PersonDisplayRow } from "./PeopleGrid";
 import { TrafficKpiCards } from "./TrafficKpis";
-import { RealContactNotice } from "../_components/RealContactNotice";
 
 const PAGE_SIZE = 20;
-
-const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function PersonasPage({
   searchParams,
 }: {
-  searchParams: Promise<Record<string, string | undefined>>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const actor = await requirePermission("people.view");
   const sp = await searchParams;
 
   // Etiquetas visibles para el usuario (alcance y sensibilidad): alimentan el filtro; una etiqueta no visible no filtra ni revela nada.
   const visibleTags = can(actor, "tags.view") ? await listVisibleTags(actor) : [];
-  const tagId = sp.tag && isUuid(sp.tag) && visibleTags.some((t) => t.id === sp.tag) ? sp.tag : undefined;
-
-  const filter: PeopleFilterSpec = {
-    tagIds: tagId ? [tagId] : undefined,
-    search: sp.q || undefined,
-    areaId: sp.area || undefined,
-    reparticionId: sp.rep || undefined,
-    trafficLight: isTrafficLight(sp.traffic) ? sp.traffic : undefined,
-    lastInteractionFrom: sp.lastFrom && ISO_DAY.test(sp.lastFrom) ? sp.lastFrom : undefined,
-    lastInteractionTo: sp.lastTo && ISO_DAY.test(sp.lastTo) ? sp.lastTo : undefined,
-    status: (sp.status as PeopleFilterSpec["status"]) || "active",
-    ageMin: sp.ageMin ? Number(sp.ageMin) : undefined,
-    ageMax: sp.ageMax ? Number(sp.ageMax) : undefined,
-  };
+  const reader = paramReaderFromRecord(sp);
+  // Mismo parser que la exportación y la selección total hacia Mailing: grilla, CSV y audiencia ven el mismo universo.
+  const filter: PeopleFilterSpec = parsePeopleFilter(reader, { visibleTagIds: new Set(visibleTags.map((t) => t.id)) });
   const sort: PeopleSort = {
-    field: (sp.sort as PeopleSort["field"]) || "name",
-    direction: (sp.dir as PeopleSort["direction"]) || "asc",
+    field: (reader.get("sort") as PeopleSort["field"]) || "name",
+    direction: (reader.get("dir") as PeopleSort["direction"]) || "asc",
   };
-  const page = sp.page ? Math.max(1, Number(sp.page)) : 1;
+  const page = reader.get("page") ? Math.max(1, Number(reader.get("page"))) : 1;
 
   const [{ rows, total }, kpis, orgTree, associations] = await Promise.all([
     listPeoplePage(actor, filter, sort, page, PAGE_SIZE),
@@ -78,16 +63,7 @@ export default async function PersonasPage({
   });
 
   // Filtros de la URL (sin semáforo ni página): base de los KPIs clicables. `exportQueryString` los incluye todos.
-  const baseParams = new URLSearchParams();
-  if (filter.search) baseParams.set("q", filter.search);
-  if (tagId) baseParams.set("tag", tagId);
-  if (filter.areaId) baseParams.set("area", filter.areaId);
-  if (filter.reparticionId) baseParams.set("rep", filter.reparticionId);
-  if (filter.lastInteractionFrom) baseParams.set("lastFrom", filter.lastInteractionFrom);
-  if (filter.lastInteractionTo) baseParams.set("lastTo", filter.lastInteractionTo);
-  if (filter.status) baseParams.set("status", filter.status);
-  if (filter.ageMin !== undefined) baseParams.set("ageMin", String(filter.ageMin));
-  if (filter.ageMax !== undefined) baseParams.set("ageMax", String(filter.ageMax));
+  const baseParams = peopleFilterToParams(filter);
   const exportParams = new URLSearchParams(baseParams);
   if (filter.trafficLight) exportParams.set("traffic", filter.trafficLight);
   exportParams.set("sort", sort.field);
@@ -106,8 +82,6 @@ export default async function PersonasPage({
           </Link>
         ) : null}
       </div>
-
-      <RealContactNotice />
 
       <TrafficKpiCards kpis={kpis} active={filter.trafficLight} baseQuery={baseParams.toString()} />
 

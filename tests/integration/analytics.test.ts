@@ -163,7 +163,7 @@ describe("analítica de Reuniones", () => {
     await changeMeetingStatus(actor, id, "scheduled");
 
     const analytics = await getMeetingsAnalytics(actor);
-    const overdue = analytics.byStatus.find((s) => s.nombre === "Vencida sin cerrar");
+    const overdue = analytics.byStatus.find((s) => s.nombre === "Vencido sin cerrar");
     expect(overdue?.valor).toBeGreaterThanOrEqual(1);
   });
 });

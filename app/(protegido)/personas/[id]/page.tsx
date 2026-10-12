@@ -21,7 +21,6 @@ import { PersonTimeline } from "./PersonTimeline";
 import { getPersonRelationship, getPersonTechnicalInteractions, getPersonTimeline } from "@/lib/people/timeline";
 import { toClientPage } from "@/lib/people/timeline-client";
 import { isMasterGlobal } from "@/lib/permissions/can";
-import { RealContactNotice } from "../../_components/RealContactNotice";
 
 function formatDate(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", { dateStyle: "short" }).format(date);
@@ -159,7 +158,6 @@ export default async function PersonaFichaPage({ params }: { params: Promise<{ i
         <section className="rounded-lg bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-brand-900">Estado de relación</h2>
           <RelationshipCards relationship={relationship} />
-          <div className="mt-3"><RealContactNotice /></div>
         </section>
       ) : null}
 

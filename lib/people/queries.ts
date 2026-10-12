@@ -28,6 +28,12 @@ export interface PeopleFilterSpec {
   ageMax?: number;
   /** Solo cuentan las etiquetas que el usuario puede ver (alcance y sensibilidad); el resto no filtra ni revela nada. */
   tagIds?: string[];
+  /** Con varias etiquetas: `any` (default) = tiene alguna de ellas; `all` = tiene todas. */
+  tagMatch?: "any" | "all";
+  /** `true` = con email (no nulo ni vacío tras trim); `false` = sin email. Sin definir = todos. */
+  hasEmail?: boolean;
+  /** `true` = con teléfono (`people.phone` no nulo ni vacío tras trim); `false` = sin teléfono. Sin definir = todos. */
+  hasPhone?: boolean;
   /** Área = ancestro raíz de la unidad de la persona. Incluye a todas las reparticiones de esa área (dentro del alcance del usuario). */
   areaId?: string;
   /** Repartición (unidad) y sus dependientes. Si viene, manda sobre `areaId`. */
@@ -138,9 +144,19 @@ function applyFilters(db: Kysely<Database>, actor: SessionUser, filter: PeopleFi
   }
 
   if (filter.tagIds && filter.tagIds.length > 0) {
-    const tagCondition = visibleTagIdsCondition(actor, filter.tagIds);
-    query = query.where(tagCondition);
+    if (filter.tagMatch === "all" && filter.tagIds.length > 1) {
+      // Todas: una condición por etiqueta (cada una respeta alcance y sensibilidad); una no visible nunca matchea.
+      for (const tagId of filter.tagIds) query = query.where(visibleTagIdsCondition(actor, [tagId]));
+    } else {
+      query = query.where(visibleTagIdsCondition(actor, filter.tagIds));
+    }
   }
+
+  // Presencia de email / teléfono: dato real de `people`, sin validar entregabilidad.
+  if (filter.hasEmail === true) query = query.where(sql<boolean>`people.email is not null and btrim(people.email) <> ''`);
+  else if (filter.hasEmail === false) query = query.where(sql<boolean>`(people.email is null or btrim(people.email) = '')`);
+  if (filter.hasPhone === true) query = query.where(sql<boolean>`people.phone is not null and btrim(people.phone) <> ''`);
+  else if (filter.hasPhone === false) query = query.where(sql<boolean>`(people.phone is null or btrim(people.phone) = '')`);
 
   // El filtro de edad solo aplica a quienes tienen fecha de nacimiento
   // real: una edad declarada sin fecha exacta no se puede acotar a un

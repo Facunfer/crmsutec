@@ -5,7 +5,7 @@ import { formatActivityContext, formatTimelineDate } from "@/lib/people/timeline
 import type { ClientTimelineEvent, ClientTimelinePage } from "@/lib/people/timeline-client";
 import { loadTimelineAction } from "./timeline-actions";
 
-type Category = "contact" | "invitation" | "registration" | "participation" | "attendance";
+type Category = "contact" | "invitation" | "registration" | "participation" | "attendance" | "mailing";
 const CHIPS: Array<{ key: Category | null; label: string }> = [
   { key: null, label: "Todo" },
   { key: "contact", label: "Contactos" },
@@ -13,6 +13,7 @@ const CHIPS: Array<{ key: Category | null; label: string }> = [
   { key: "registration", label: "Inscripciones" },
   { key: "participation", label: "Actividades" },
   { key: "attendance", label: "Asistencia" },
+  { key: "mailing", label: "Mailing" },
 ];
 
 function EventRow({ e }: { e: ClientTimelineEvent }) {
@@ -31,12 +32,14 @@ function EventRow({ e }: { e: ClientTimelineEvent }) {
         {e.administrative ? <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[11px] text-brand-700">Acto administrativo</span> : null}
       </div>
       <div className="mt-0.5 space-y-0.5 text-xs text-brand-600 sm:ml-[10.5rem]">
-        {activityName ? (
+        {activityName && e.category !== "participation" ? (
           <div>
             {activityName}
-            {e.activity?.type === "campaign" && e.category === "participation" ? " — jornada no determinada" : ""}
             {context ? ` (${context})` : ""}
           </div>
+        ) : null}
+        {e.category === "participation" && (e.activity?.type === "campaign" || context) ? (
+          <div>{[e.activity?.type === "campaign" ? "Jornada no determinada" : null, context].filter(Boolean).join(" · ")}</div>
         ) : null}
         {e.description ? <div>{e.description}</div> : null}
         {e.origin ? <div>Canal / origen: {e.origin}</div> : null}

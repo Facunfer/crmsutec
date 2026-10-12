@@ -1,7 +1,6 @@
 import { requirePermission } from "@/lib/auth/guard";
 import { getDashboardCounts, getParticipationInteractionKpis } from "@/lib/analytics/queries";
 import { getTrafficKpis } from "@/lib/people/queries";
-import { RealContactNotice } from "../_components/RealContactNotice";
 
 export default async function DashboardPage() {
   const actor = await requirePermission("dashboard.view");
@@ -55,7 +54,6 @@ export default async function DashboardPage() {
       </div>
 
       <h2 className="mb-1 mt-8 text-sm font-semibold uppercase tracking-wide text-brand-400">Participación y contacto</h2>
-      <div className="mb-3"><RealContactNotice /></div>
       <p className="mb-3 text-xs text-brand-400">
         Cada número es un concepto distinto: no deberían coincidir entre sí. &quot;Filas físicas&quot; incluye inscripciones que conviven con su participación agregada por la
         carga histórica; &quot;participaciones lógicas&quot; cuenta solo participación real (attended/participated), sin ese doble conteo.

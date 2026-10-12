@@ -3,7 +3,7 @@ import { getSessionUser } from "@/lib/auth/guard";
 import { can } from "@/lib/permissions/can";
 import { exportPeopleCsv } from "@/lib/people/export";
 import type { PeopleFilterSpec, PeopleSort } from "@/lib/people/queries";
-import { isTrafficLight } from "@/lib/people/traffic";
+import { paramReaderFromSearchParams, parsePeopleFilter } from "@/lib/people/filter-params";
 
 export async function GET(request: NextRequest): Promise<Response> {
   const user = await getSessionUser();
@@ -15,19 +15,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const sp = request.nextUrl.searchParams;
-  const filter: PeopleFilterSpec = {
-    // La visibilidad de la etiqueta la resuelve la consulta (alcance y sensibilidad): una no visible no filtra ni revela nada.
-    tagIds: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sp.get("tag") ?? "") ? [sp.get("tag")!] : undefined,
-    search: sp.get("q") || undefined,
-    areaId: sp.get("area") || undefined,
-    reparticionId: sp.get("rep") || undefined,
-    trafficLight: isTrafficLight(sp.get("traffic")) ? (sp.get("traffic") as PeopleFilterSpec["trafficLight"]) : undefined,
-    lastInteractionFrom: /^\d{4}-\d{2}-\d{2}$/.test(sp.get("lastFrom") ?? "") ? sp.get("lastFrom")! : undefined,
-    lastInteractionTo: /^\d{4}-\d{2}-\d{2}$/.test(sp.get("lastTo") ?? "") ? sp.get("lastTo")! : undefined,
-    status: (sp.get("status") as PeopleFilterSpec["status"]) || "active",
-    ageMin: sp.get("ageMin") ? Number(sp.get("ageMin")) : undefined,
-    ageMax: sp.get("ageMax") ? Number(sp.get("ageMax")) : undefined,
-  };
+  // Mismo parser que la grilla y Mailing (la visibilidad de las etiquetas la resuelve la consulta: una no visible no filtra ni revela).
+  const filter: PeopleFilterSpec = parsePeopleFilter(paramReaderFromSearchParams(sp));
   const sort: PeopleSort = {
     field: (sp.get("sort") as PeopleSort["field"]) || "name",
     direction: (sp.get("dir") as PeopleSort["direction"]) || "asc",
