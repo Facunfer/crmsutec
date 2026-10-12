@@ -270,6 +270,8 @@ export interface MeetingsTable {
   import_batch_id: string | null;
   /** 0036: campaña a la que pertenece esta jornada (nullable; las reuniones comunes y las capacitaciones no tienen). */
   campaign_id: string | null;
+  /** 0043: capacidad BLANDA (advierte, no bloquea). */
+  capacity: number | null;
   schedule_precision: Generated<MeetingSchedulePrecision>;
   event_date: Date | null;
   source_time_note: string | null;
@@ -441,12 +443,27 @@ export interface FormsTable {
   opens_at: Date | null;
   closes_at: Date | null;
   identification_policy: JsonColumnWithDefault;
+  /** DEPRECADA (0043): la reemplaza apply_data_policy. Ya no se lee. */
   update_policy: Generated<"fill_empty_only" | "always_flag_for_review">;
   published_version: number | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
   created_by: string | null;
+  // 0043
+  description: string | null;
+  campaign_id: string | null;
+  /** Reunión/jornada destino fija. */
+  meeting_id: string | null;
+  /** Jornada por defecto dentro de la campaña (solo con campaign_id y sin meeting_id). */
+  default_meeting_id: string | null;
+  person_creation_policy: Generated<FormPersonCreationPolicy>;
+  apply_data_policy: Generated<FormApplyDataPolicy>;
 }
+
+/** 0043: «never» por defecto. Solo `when_valid_dni` crea personas desde un envío sin coincidencia (y con DNI válido). */
+export type FormPersonCreationPolicy = "never" | "when_valid_dni";
+/** 0043: «never» por defecto. `fill_empty_only` completa solo campos VACÍOS de la persona vinculada. */
+export type FormApplyDataPolicy = "never" | "fill_empty_only";
 
 export interface FormVersionsTable {
   id: Generated<string>;
@@ -467,6 +484,9 @@ export interface FormFieldsTable {
   visible: Generated<boolean>;
   sort_order: Generated<number>;
   person_field_mapping: string | null;
+  // 0043
+  description: string | null;
+  validation: JsonColumn | null;
 }
 
 export interface FormActionsTable {
@@ -477,7 +497,9 @@ export interface FormActionsTable {
   sort_order: Generated<number>;
 }
 
-export type SubmissionMatchResult = "pending" | "created" | "matched" | "needs_review" | "error";
+export type SubmissionMatchResult = "pending" | "created" | "matched" | "needs_review" | "error" | "unlinked";
+export type SubmissionSource = "public" | "csv_import" | "manual";
+export type FormSubmissionEventType = "auto_linked" | "auto_person_created" | "auto_data_applied" | "linked" | "person_created" | "data_applied" | "enrolled";
 
 export interface FormSubmissionsTable {
   id: Generated<string>;
@@ -493,6 +515,25 @@ export interface FormSubmissionsTable {
   error_message: string | null;
   created_at: Generated<Date>;
   processed_at: Date | null;
+  // 0043
+  source: Generated<SubmissionSource>;
+  source_import_row_id: string | null;
+}
+
+/** 0043 — historial append-only de acciones sobre respuestas (provenance; la inscripción canónica vive en meeting_participations). */
+export interface FormSubmissionEventsTable {
+  id: Generated<string>;
+  seq: Generated<string>;
+  submission_id: string;
+  event_type: FormSubmissionEventType;
+  person_id: string;
+  meeting_id: string | null;
+  participation_id: string | null;
+  /** NULL solo en los eventos automáticos (auto_*). */
+  recorded_by: string | null;
+  reason: string | null;
+  details: JsonColumnWithDefault;
+  occurred_at: Generated<Date>;
 }
 
 export interface PersonDuplicateCandidatesTable {
@@ -781,7 +822,8 @@ export interface MeetingParticipationsTable {
   void_reason: string | null;
 }
 
-export type RegistrationChannel = "whatsapp" | "email" | "sms" | "phone" | "in_person" | "other";
+/** `form` (0043): inscripción hecha por un operador a partir de una respuesta de formulario. */
+export type RegistrationChannel = "whatsapp" | "email" | "sms" | "phone" | "in_person" | "other" | "form";
 export type RegistrationEventType = "registered" | "voided" | "restored" | "corrected";
 
 /** 0042 — historial append-only de inscripciones operativas. `meeting_participations` es el estado actual. */
@@ -866,6 +908,7 @@ export interface Database {
   import_entity_links: ImportEntityLinksTable;
   meeting_participations: MeetingParticipationsTable;
   meeting_registration_events: MeetingRegistrationEventsTable;
+  form_submission_events: FormSubmissionEventsTable;
   sutecba_meta: SutecbaMetaTable;
   sutecba_migrations: SutecbaMigrationsTable;
 }

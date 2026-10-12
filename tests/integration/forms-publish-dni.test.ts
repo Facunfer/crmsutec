@@ -56,7 +56,7 @@ const goodDni: FieldSpec = { key: "dni", label: "DNI", fieldType: "dni", require
 async function makeDraft(extra: FieldSpec[]) {
   const slug = `pub-dni-${++slugCounter}`;
   const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: slug, slug });
-  await updateFormMeta(actor, id, { name: slug, slug, consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], updatePolicy: "fill_empty_only" });
+  await updateFormMeta(actor, id, { name: slug, slug, consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only" });
   for (const f of [...nameFields, ...extra]) await upsertField(actor, id, null, f as any);
   return { id, slug };
 }

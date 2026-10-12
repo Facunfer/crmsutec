@@ -85,6 +85,7 @@ function Field({ field, error, associations }: { field: FormVersionField; error?
   return (
     <div>
       {field.fieldType !== "checkbox" && field.fieldType !== "radio" ? label : <p className="text-sm font-medium text-brand-900">{field.label}{field.required ? <span className="text-estado-riesgo"> *</span> : null}</p>}
+      {field.description ? <p className="mt-0.5 text-xs text-brand-400">{field.description}</p> : null}
       {input}
       {error ? <p className="mt-1 text-sm text-estado-riesgo">{error}</p> : null}
     </div>

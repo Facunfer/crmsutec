@@ -621,7 +621,7 @@ describe("formularios públicos y traslados", () => {
       opensAt: "",
       closesAt: "",
       matchFields: ["dni"],
-      updatePolicy: "fill_empty_only",
+      personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only",
     } as any);
     for (const [key, label, type, mapping] of [
       ["first_name", "Nombre", "text", "first_name"],

@@ -83,6 +83,34 @@ export function FieldForm({
           ) : null}
         </select>
       </div>
+      <div className="sm:col-span-2 lg:col-span-4">
+        <label className="block text-xs text-brand-500">Descripción / ayuda (opcional)</label>
+        <input name="description" defaultValue={field?.description ?? ""} maxLength={500} className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+      </div>
+      {fieldType === "text" || fieldType === "textarea" ? (
+        <>
+          <div>
+            <label className="block text-xs text-brand-500">Largo mínimo</label>
+            <input name="minLength" type="number" min={0} defaultValue={field?.validation?.minLength ?? ""} className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs text-brand-500">Largo máximo</label>
+            <input name="maxLength" type="number" min={1} defaultValue={field?.validation?.maxLength ?? ""} className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+          </div>
+        </>
+      ) : null}
+      {fieldType === "number" ? (
+        <>
+          <div>
+            <label className="block text-xs text-brand-500">Valor mínimo</label>
+            <input name="min" type="number" defaultValue={field?.validation?.min ?? ""} className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs text-brand-500">Valor máximo</label>
+            <input name="max" type="number" defaultValue={field?.validation?.max ?? ""} className="mt-1 w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm" />
+          </div>
+        </>
+      ) : null}
       {hasChoices ? (
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="block text-xs text-brand-500">Opciones (una por línea, "valor|etiqueta")</label>

@@ -70,7 +70,8 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
-async function makeBasicForm(name: string, slug: string, opts: { updatePolicy?: "fill_empty_only" | "always_flag_for_review" } = {}) {
+/** Por defecto reproduce el comportamiento anterior a 0043 de forma EXPLÍCITA (crea personas y completa vacíos); los defaults nuevos se prueban en forms-f1.test.ts. */
+async function makeBasicForm(name: string, slug: string, opts: { personCreationPolicy?: "never" | "when_valid_dni"; applyDataPolicy?: "never" | "fill_empty_only" } = {}) {
   const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name, slug });
   await updateFormMeta(actor, id, {
     name,
@@ -80,7 +81,8 @@ async function makeBasicForm(name: string, slug: string, opts: { updatePolicy?: 
     opensAt: "",
     closesAt: "",
     matchFields: ["dni", "email", "phone"],
-    updatePolicy: opts.updatePolicy ?? "fill_empty_only",
+    personCreationPolicy: opts.personCreationPolicy ?? "when_valid_dni",
+    applyDataPolicy: opts.applyDataPolicy ?? "fill_empty_only",
   });
   await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
   await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
@@ -114,7 +116,7 @@ describe("ciclo de vida del constructor: publicar exige nombre y apellido mapead
     const id = await makeBasicForm("Formulario Archivable", "form-archivable");
     await changeFormStatus(actor, id, "archived");
     await expect(publishForm(actor, id)).rejects.toThrow(FormCommandError);
-    await expect(updateFormMeta(actor, id, { name: "x", slug: "form-archivable", matchFields: [], updatePolicy: "fill_empty_only" } as any)).rejects.toThrow(FormCommandError);
+    await expect(updateFormMeta(actor, id, { name: "x", slug: "form-archivable", matchFields: [], personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only" } as any)).rejects.toThrow(FormCommandError);
   });
 });
 
@@ -182,7 +184,7 @@ describe("envío público: crea, matchea (fill_empty_only) y nunca pisa un dato 
     await createFieldDefinition(actor, { key: "talle", label: "Talle de ropa", fieldType: "text" });
 
     const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Custom", slug: "form-custom" });
-    await updateFormMeta(actor, id, { name: "Formulario Custom", slug: "form-custom", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], updatePolicy: "fill_empty_only" });
+    await updateFormMeta(actor, id, { name: "Formulario Custom", slug: "form-custom", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only" });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
     await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
@@ -203,7 +205,7 @@ describe("envío público: crea, matchea (fill_empty_only) y nunca pisa un dato 
     const { id: associationId } = await createAssociation(actor, { ownerOrganizationId: ownerOrgId, name: "Asociación De Formulario", typeId: assocType.id });
 
     const { id } = await createForm(actor, { ownerOrganizationId: ownerOrgId, name: "Formulario Con Accion", slug: "form-con-accion" });
-    await updateFormMeta(actor, id, { name: "Formulario Con Accion", slug: "form-con-accion", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], updatePolicy: "fill_empty_only" });
+    await updateFormMeta(actor, id, { name: "Formulario Con Accion", slug: "form-con-accion", consentText: "", successMessage: "", opensAt: "", closesAt: "", matchFields: ["dni"], personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only" });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
     await upsertField(actor, id, null, { key: "dni", label: "DNI", fieldType: "dni", required: true, visible: true, personFieldMapping: "dni" });
@@ -219,47 +221,50 @@ describe("envío público: crea, matchea (fill_empty_only) y nunca pisa un dato 
   });
 });
 
-describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a revisión", () => {
-  it("un match no toca a la persona hasta que alguien lo confirma desde la bandeja", async () => {
-    const id = await makeBasicForm("Formulario Revision", "form-revision", { updatePolicy: "always_flag_for_review" });
+describe("revisión manual: vincular, crear persona nueva y descartar (0043: vincular NO completa datos)", () => {
+  /** Un envío cuyo email coincide con una persona pero con OTRO DNI: no se vincula solo, queda en revisión. */
+  async function homonymCandidate(slug: string, base: { dni: string; email: string }) {
+    const id = await makeBasicForm(`Formulario ${slug}`, slug, { applyDataPolicy: "never" });
+    await publishForm(actor, id);
+    await submitForm(slug, baseEntries({ dni: base.dni, email: base.email, first_name: "Original" }), randomUUID(), nextIp(), "agent");
+    const db = await getDb();
+    const original = await db.selectFrom("people").selectAll().where("dni", "=", base.dni).executeTakeFirstOrThrow();
+    await submitForm(slug, baseEntries({ dni: nextDni(), email: base.email, first_name: "Homonimo" }), randomUUID(), nextIp(), "agent");
+    const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", original.id).where("status", "=", "pending").executeTakeFirstOrThrow();
+    return { db, id, original, candidate };
+  }
+
+  it("con apply_data_policy=never un envío vinculado NO toca a la persona", async () => {
+    const id = await makeBasicForm("Formulario Revision", "form-revision", { applyDataPolicy: "never" });
     await publishForm(actor, id);
 
-    const first = await submitForm("form-revision", baseEntries({ dni: "30333222" }), randomUUID(), nextIp(), "agent");
-    expect(first.kind).toBe("ok");
-
+    await submitForm("form-revision", baseEntries({ dni: "30333222" }), randomUUID(), nextIp(), "agent");
     const db = await getDb();
     const person = await db.selectFrom("people").selectAll().where("dni", "=", "30333222").executeTakeFirstOrThrow();
 
-    const second = await submitForm("form-revision", baseEntries({ dni: "30333222", email: "nuevo@example.com" }), randomUUID(), nextIp(), "agent");
-    expect(second.kind).toBe("ok");
+    await submitForm("form-revision", baseEntries({ dni: "30333222", email: "nuevo@example.com" }), randomUUID(), nextIp(), "agent");
+    const untouched = await db.selectFrom("people").select("email").where("id", "=", person.id).executeTakeFirstOrThrow();
+    expect(untouched.email).toBeNull(); // el dato NO se aplicó solo
 
-    const stillEmpty = await db.selectFrom("people").select("email").where("id", "=", person.id).executeTakeFirstOrThrow();
-    expect(stillEmpty.email).toBeNull(); // no se aplicó solo, quedó pendiente de revisión
+    const linked = await db.selectFrom("form_submissions").select(["match_result", "person_id"]).where("form_id", "=", id).where("person_id", "=", person.id).execute();
+    expect(linked.length).toBe(2); // ambas respuestas vinculadas por DNI; solo vinculadas
+  });
 
-    const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", person.id).where("status", "=", "pending").executeTakeFirstOrThrow();
-
+  it("vincular un candidato VINCULA pero no completa datos", async () => {
+    const { db, original, candidate } = await homonymCandidate("form-revision-vincular", { dni: "30333123", email: "compartido-v@example.com" });
     await linkDuplicateCandidate(actor, candidate.id);
-
-    const afterLink = await db.selectFrom("people").select("email").where("id", "=", person.id).executeTakeFirstOrThrow();
-    expect(afterLink.email).toBe("nuevo@example.com");
-
+    const afterLink = await db.selectFrom("people").select(["email", "first_name"]).where("id", "=", original.id).executeTakeFirstOrThrow();
+    expect(afterLink.email).toBe("compartido-v@example.com"); // ya lo tenía
+    expect(afterLink.first_name).toBe("Original"); // y no se pisó nada
     const submissionRow = await db.selectFrom("form_submissions").select(["match_result", "person_id"]).where("id", "=", candidate.submission_id!).executeTakeFirstOrThrow();
     expect(submissionRow.match_result).toBe("matched");
-    expect(submissionRow.person_id).toBe(person.id);
+    expect(submissionRow.person_id).toBe(original.id);
+    const ev = await db.selectFrom("form_submission_events").select("event_type").where("submission_id", "=", candidate.submission_id!).execute();
+    expect(ev.map((e) => e.event_type)).toContain("linked");
   });
 
   it("'es una persona nueva' crea otra persona en vez de tocar la que matcheaba (coincidencia por email, DNI distinto)", async () => {
-    const id = await makeBasicForm("Formulario Revision Nueva", "form-revision-nueva", { updatePolicy: "always_flag_for_review" });
-    await publishForm(actor, id);
-
-    await submitForm("form-revision-nueva", baseEntries({ email: "compartido@example.com", dni: "30333555", first_name: "Original" }), randomUUID(), nextIp(), "agent");
-
-    const db = await getDb();
-    const original = await db.selectFrom("people").selectAll().where("email", "=", "compartido@example.com").executeTakeFirstOrThrow();
-
-    // Mismo email (coincide), pero un DNI distinto: puede ser una persona homónima de verdad.
-    await submitForm("form-revision-nueva", baseEntries({ email: "compartido@example.com", dni: "30333666", first_name: "Homonimo" }), randomUUID(), nextIp(), "agent");
-    const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", original.id).where("status", "=", "pending").executeTakeFirstOrThrow();
+    const { db, original, candidate } = await homonymCandidate("form-revision-nueva", { dni: "30333555", email: "compartido@example.com" });
 
     const { personId: newPersonId } = await createNewFromCandidate(actor, candidate.id);
     expect(newPersonId).not.toBe(original.id);
@@ -272,56 +277,48 @@ describe("update_policy=always_flag_for_review: nunca actualiza sola, siempre a 
   });
 
   it("'es una persona nueva' con el mismo DNI que ya causó el match da un error claro, no un crash", async () => {
-    const id = await makeBasicForm("Formulario Revision DNI Choca", "form-revision-dni-choca", { updatePolicy: "always_flag_for_review" });
+    const id = await makeBasicForm("Formulario Revision DNI Choca", "form-revision-dni-choca", { applyDataPolicy: "never" });
     await publishForm(actor, id);
 
     await submitForm("form-revision-dni-choca", baseEntries({ dni: "30333999", first_name: "Original" }), randomUUID(), nextIp(), "agent");
     const db = await getDb();
     const original = await db.selectFrom("people").selectAll().where("dni", "=", "30333999").executeTakeFirstOrThrow();
 
+    // Segunda respuesta con el MISMO DNI: se vincula sola. Se arma a mano un candidato para probar que crear «otra» persona con ese DNI choca.
     await submitForm("form-revision-dni-choca", baseEntries({ dni: "30333999", first_name: "Otro" }), randomUUID(), nextIp(), "agent");
-    const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", original.id).where("status", "=", "pending").executeTakeFirstOrThrow();
+    const sub = await db.selectFrom("form_submissions").select("id").where("form_id", "=", id).orderBy("created_at", "desc").limit(1).executeTakeFirstOrThrow();
+    const candidate = await db.insertInto("person_duplicate_candidates").values({ person_id: original.id, submission_id: sub.id, match_reason: "prueba" }).returning("id").executeTakeFirstOrThrow();
 
     await expect(createNewFromCandidate(actor, candidate.id)).rejects.toThrow(/conflicto de identificación/i);
 
-    // El candidato sigue pendiente: el intento fallido no lo marcó como resuelto.
     const stillPending = await db.selectFrom("person_duplicate_candidates").select("status").where("id", "=", candidate.id).executeTakeFirstOrThrow();
     expect(stillPending.status).toBe("pending");
   });
 
-  it("descartar no crea ni vincula nada", async () => {
-    const id = await makeBasicForm("Formulario Revision Descartar", "form-revision-descartar", { updatePolicy: "always_flag_for_review" });
-    await publishForm(actor, id);
-
-    await submitForm("form-revision-descartar", baseEntries({ dni: "30333777" }), randomUUID(), nextIp(), "agent");
-    const db = await getDb();
-    const person = await db.selectFrom("people").selectAll().where("dni", "=", "30333777").executeTakeFirstOrThrow();
-
-    await submitForm("form-revision-descartar", baseEntries({ dni: "30333777", email: "descartado@example.com" }), randomUUID(), nextIp(), "agent");
-    const candidate = await db.selectFrom("person_duplicate_candidates").selectAll().where("person_id", "=", person.id).where("status", "=", "pending").executeTakeFirstOrThrow();
+  it("descartar no crea ni vincula nada; la respuesta queda «sin vincular»", async () => {
+    const { db, original, candidate } = await homonymCandidate("form-revision-descartar", { dni: "30333777", email: "descartado@example.com" });
 
     await discardDuplicateCandidate(actor, candidate.id);
 
     const rows = await db.selectFrom("people").selectAll().where("dni", "=", "30333777").execute();
     expect(rows.length).toBe(1);
-    expect(rows[0]?.email).toBeNull();
+    expect(rows[0]?.id).toBe(original.id);
 
     const discarded = await db.selectFrom("person_duplicate_candidates").select("status").where("id", "=", candidate.id).executeTakeFirstOrThrow();
     expect(discarded.status).toBe("discarded");
+    const submissionRow = await db.selectFrom("form_submissions").select(["match_result", "person_id"]).where("id", "=", candidate.submission_id!).executeTakeFirstOrThrow();
+    expect(submissionRow.person_id).toBeNull();
+    expect(submissionRow.match_result).toBe("unlinked");
   });
 
   it("sin people.view_sensitive, la bandeja de revisión no trae el payload crudo del envío (hallazgo real de la Etapa 10)", async () => {
-    const id = await makeBasicForm("Formulario Revision Payload", "form-revision-payload", { updatePolicy: "always_flag_for_review" });
-    await publishForm(actor, id);
-
-    await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "sensible@example.com" }), randomUUID(), nextIp(), "agent");
-    await submitForm("form-revision-payload", baseEntries({ dni: "30333888", email: "otro-sensible@example.com" }), randomUUID(), nextIp(), "agent");
+    await homonymCandidate("form-revision-payload", { dni: "30333888", email: "sensible@example.com" });
 
     const withPermission = await listPendingDuplicateCandidates(actor, true);
     const withoutPermission = await listPendingDuplicateCandidates(actor, false);
 
-    const candidateWith = withPermission.find((c) => c.matchReason.includes("dni"));
-    const candidateWithout = withoutPermission.find((c) => c.matchReason.includes("dni"));
+    const candidateWith = withPermission.find((c) => c.matchReason.includes("email"));
+    const candidateWithout = withoutPermission.find((c) => c.matchReason.includes("email"));
 
     expect(candidateWith?.rawPayload).not.toBeNull();
     expect(candidateWithout?.rawPayload).toBeNull();
@@ -399,7 +396,7 @@ describe("validación pública: campo obligatorio vacío y consentimiento", () =
       opensAt: "",
       closesAt: "",
       matchFields: ["dni"],
-      updatePolicy: "fill_empty_only",
+      personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only",
     });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });

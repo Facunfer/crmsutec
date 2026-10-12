@@ -5,6 +5,8 @@ import { can } from "@/lib/permissions/can";
 import { getFormById, listFormActions, listFormFields } from "@/lib/forms/queries";
 import { listFieldDefinitions } from "@/lib/people/field-definitions";
 import { listAssociations } from "@/lib/associations/queries";
+import { listCampaigns } from "@/lib/campaigns/queries";
+import { listMeetings } from "@/lib/meetings/queries";
 import { MetaForm } from "./MetaForm";
 import { FieldsManager } from "./FieldsManager";
 import { ActionsManager } from "./ActionsManager";
@@ -24,11 +26,13 @@ export default async function FormDetailPage({ params }: { params: Promise<{ id:
   const form = await getFormById(actor, id);
   if (!form) notFound();
 
-  const [fields, actions, fieldDefinitions, associations] = await Promise.all([
+  const [fields, actions, fieldDefinitions, associations, campaigns, meetings] = await Promise.all([
     listFormFields(actor, id),
     listFormActions(actor, id),
     listFieldDefinitions({ onlyActive: true }),
     listAssociations(actor),
+    can(actor, "forms.edit") ? listCampaigns(actor) : Promise.resolve([]),
+    can(actor, "forms.edit") ? listMeetings(actor) : Promise.resolve([]),
   ]);
 
   const canEdit = can(actor, "forms.edit") && form.status !== "archived";
@@ -54,7 +58,13 @@ export default async function FormDetailPage({ params }: { params: Promise<{ id:
 
       <section className="rounded-lg bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-brand-900">Datos del formulario</h2>
-        <MetaForm formId={id} form={form} canEdit={canEdit} />
+        <MetaForm
+          formId={id}
+          form={form}
+          canEdit={canEdit}
+          campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
+          meetings={meetings.map((m) => ({ id: m.id, name: m.name, campaignId: m.campaignId }))}
+        />
       </section>
 
       <section className="rounded-lg bg-white p-4 shadow-sm">

@@ -115,7 +115,8 @@ async function makeForm(slug: string, matchFields: string[], fields: Array<[stri
     opensAt: "",
     closesAt: "",
     matchFields,
-    updatePolicy: "fill_empty_only",
+    personCreationPolicy: "when_valid_dni",
+    applyDataPolicy: "fill_empty_only",
   } as any);
   for (const [key, label, type, mapping] of fields) {
     await formCommands.upsertField(master, formId, null, { key, label, fieldType: type, required: key === "first_name" || key === "last_name" || key === "dni", visible: true, personFieldMapping: mapping } as any);

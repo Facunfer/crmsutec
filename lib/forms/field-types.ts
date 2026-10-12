@@ -36,6 +36,32 @@ export function parseFieldOptions(raw: unknown): FieldOptions {
   };
 }
 
+/** Validación acotada por campo (0043). Solo límites numéricos: nada de expresiones regulares ni código arbitrario. */
+export interface FieldValidation {
+  /** text/textarea: largo mínimo / máximo. */
+  minLength?: number;
+  maxLength?: number;
+  /** number: valor mínimo / máximo. */
+  min?: number;
+  max?: number;
+}
+
+export function parseFieldValidation(raw: unknown): FieldValidation {
+  if (!raw || typeof raw !== "object") return {};
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const out: FieldValidation = {};
+  const minLength = num(r.minLength);
+  const maxLength = num(r.maxLength);
+  const min = num(r.min);
+  const max = num(r.max);
+  if (minLength !== undefined && minLength >= 0) out.minLength = Math.trunc(minLength);
+  if (maxLength !== undefined && maxLength > 0) out.maxLength = Math.trunc(maxLength);
+  if (min !== undefined) out.min = min;
+  if (max !== undefined) out.max = max;
+  return out;
+}
+
 export interface FieldTypeDef {
   key: PersonFieldType;
   label: string;
@@ -43,7 +69,7 @@ export interface FieldTypeDef {
   kind: "text" | "textarea" | "number" | "date" | "choice-single" | "choice-multi";
   hasChoices: boolean;
   normalize?: (raw: string) => string | null;
-  buildSchema: (params: { required: boolean; options: FieldOptions }) => z.ZodTypeAny;
+  buildSchema: (params: { required: boolean; options: FieldOptions; validation?: FieldValidation }) => z.ZodTypeAny;
 }
 
 function choiceValues(options: FieldOptions): [string, ...string[]] {
@@ -57,9 +83,13 @@ export const FIELD_TYPES: Record<PersonFieldType, FieldTypeDef> = {
     label: FIELD_TYPE_LABELS.text,
     kind: "text",
     hasChoices: false,
-    buildSchema: ({ required }) => {
-      const base = z.string().trim().max(500);
-      return required ? base.min(1, "Este campo es obligatorio.") : base.optional().or(z.literal(""));
+    buildSchema: ({ required, validation }) => {
+      const max = Math.min(validation?.maxLength ?? 500, 500);
+      const minLength = validation?.minLength ?? 0;
+      const base = z.string().trim().max(max, `Máximo ${max} caracteres.`);
+      if (required) return base.min(Math.max(minLength, 1), minLength > 1 ? `Mínimo ${minLength} caracteres.` : "Este campo es obligatorio.");
+      // Opcional: vacío es válido; si se completa, respeta el mínimo.
+      return base.refine((v) => v === "" || v.length >= minLength, `Mínimo ${minLength} caracteres.`).optional().or(z.literal(""));
     },
   },
   textarea: {
@@ -67,9 +97,12 @@ export const FIELD_TYPES: Record<PersonFieldType, FieldTypeDef> = {
     label: FIELD_TYPE_LABELS.textarea,
     kind: "textarea",
     hasChoices: false,
-    buildSchema: ({ required }) => {
-      const base = z.string().trim().max(5000);
-      return required ? base.min(1, "Este campo es obligatorio.") : base.optional().or(z.literal(""));
+    buildSchema: ({ required, validation }) => {
+      const max = Math.min(validation?.maxLength ?? 5000, 5000);
+      const minLength = validation?.minLength ?? 0;
+      const base = z.string().trim().max(max, `Máximo ${max} caracteres.`);
+      if (required) return base.min(Math.max(minLength, 1), minLength > 1 ? `Mínimo ${minLength} caracteres.` : "Este campo es obligatorio.");
+      return base.refine((v) => v === "" || v.length >= minLength, `Mínimo ${minLength} caracteres.`).optional().or(z.literal(""));
     },
   },
   dni: {
@@ -110,7 +143,9 @@ export const FIELD_TYPES: Record<PersonFieldType, FieldTypeDef> = {
     label: FIELD_TYPE_LABELS.number,
     kind: "number",
     hasChoices: false,
-    buildSchema: ({ required }) => {
+    buildSchema: ({ required, validation }) => {
+      const inRange = (v: unknown) => v === null || typeof v !== "number" || ((validation?.min === undefined || v >= validation.min) && (validation?.max === undefined || v <= validation.max));
+      const rangeMessage = validation?.min !== undefined && validation?.max !== undefined ? `Ingresá un número entre ${validation.min} y ${validation.max}.` : validation?.min !== undefined ? `Ingresá un número mayor o igual a ${validation.min}.` : `Ingresá un número menor o igual a ${validation?.max}.`;
       // Ojo (mismo caso que declaredAge en lib/people/schema.ts): si se
       // coerciona primero, Number("") da 0 y una cadena vacía "pasa" como
       // número válido. Acá se rechaza la cadena vacía antes de coercionar.
@@ -119,9 +154,10 @@ export const FIELD_TYPES: Record<PersonFieldType, FieldTypeDef> = {
           .string()
           .trim()
           .min(1, "Este campo es obligatorio.")
-          .pipe(z.coerce.number({ message: "Ingresá un número." }));
+          .pipe(z.coerce.number({ message: "Ingresá un número." }))
+          .refine(inRange, rangeMessage);
       }
-      return z.literal("").transform(() => null).or(z.coerce.number());
+      return z.literal("").transform(() => null).or(z.coerce.number()).refine(inRange, rangeMessage);
     },
   },
   date: {

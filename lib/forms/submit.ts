@@ -6,7 +6,9 @@ import { toJsonb } from "../db/json.js";
 import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
 import { FIELD_TYPES, isCorePersonMapping } from "./field-types.js";
 import { getFormBySlug, getPublishedVersionSchema } from "./queries.js";
-import { applyActions, createPersonFromSubmission, FormApplyError, MISSING_DNI_MESSAGE, mergeEmptyFieldsOnly, splitCoreAndCustomValues, submissionDni } from "./apply.js";
+import { applyActions, applyFieldsToPerson, createPersonFromSubmission, FormApplyError, splitCoreAndCustomValues, submissionDni } from "./apply.js";
+import { insertSubmissionEvents } from "./events.js";
+import type { FormApplyDataPolicy, FormPersonCreationPolicy } from "../db/schema.js";
 import { matchPerson } from "./matching.js";
 import type { FormVersionField, FormVersionSchema } from "./version-schema.js";
 
@@ -29,7 +31,7 @@ function buildZodShape(fields: FormVersionField[]): z.ZodRawShape {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const field of fields) {
     if (!field.visible) continue;
-    shape[field.key] = FIELD_TYPES[field.fieldType].buildSchema({ required: field.required, options: field.options });
+    shape[field.key] = FIELD_TYPES[field.fieldType].buildSchema({ required: field.required, options: field.options, validation: field.validation });
   }
   return shape;
 }
@@ -128,7 +130,10 @@ export async function submitForm(
   }
 
   try {
-    await processSubmission(inserted.id, form.id, form.ownerOrganizationId, schema, normalizedValues);
+    await processSubmission(inserted.id, form.id, form.ownerOrganizationId, schema, normalizedValues, {
+      personCreation: form.personCreationPolicy,
+      applyData: form.applyDataPolicy,
+    });
   } catch (err) {
     await db
       .updateTable("form_submissions")
@@ -143,12 +148,28 @@ export async function submitForm(
   return { kind: "ok", successMessage };
 }
 
+/** Políticas vigentes del formulario al procesar el envío (se leen de `forms`, no del snapshot: cambiar una política rige para los próximos envíos). */
+interface ProcessingPolicy {
+  personCreation: FormPersonCreationPolicy;
+  applyData: FormApplyDataPolicy;
+}
+
+/**
+ * Procesa un envío YA persistido (raw_payload inmutable). Reglas (0043):
+ *  - coincidencia inequívoca (única y dentro de la unidad del formulario) → se VINCULA el envío a la persona;
+ *  - NO se crea una persona salvo `person_creation_policy = when_valid_dni` (y con DNI válido);
+ *  - NO se completan datos de la persona salvo `apply_data_policy = fill_empty_only` (solo campos vacíos);
+ *  - sin coincidencia → «sin vincular» (match_result = 'unlinked'): un operador decide (vincular / crear / aplicar datos);
+ *  - ambigua o fuera de la unidad → revisión (person_duplicate_candidates), sin modificar a nadie.
+ * Completar un formulario NUNCA inscribe, no crea participación ni asistencia ni contacto.
+ */
 async function processSubmission(
   submissionId: string,
   formId: string,
   ownerOrganizationId: string,
   schema: FormVersionSchema,
-  normalizedValues: Record<string, unknown>
+  normalizedValues: Record<string, unknown>,
+  policy: ProcessingPolicy
 ): Promise<void> {
   const db = await getDb();
   const { coreValues, customValues } = splitCoreAndCustomValues(schema, normalizedValues, isCorePersonMapping);
@@ -162,11 +183,9 @@ async function processSubmission(
   const outcome = await matchPerson(schema.identificationPolicy.matchFields, identity);
 
   if (outcome.kind === "none") {
-    // Sin coincidencia y sin DNI válido no se puede crear una persona: el envío se conserva, queda en revisión
-    // (candidato sin persona propuesta) y NO se inserta nada en `people`.
-    if (!submissionDni(coreValues)) {
-      await db.insertInto("person_duplicate_candidates").values({ person_id: null, submission_id: submissionId, match_reason: MISSING_DNI_MESSAGE }).execute();
-      await db.updateTable("form_submissions").set({ match_result: "needs_review", processed_at: new Date() }).where("id", "=", submissionId).execute();
+    // Política por defecto («never»): el envío se conserva SIN VINCULAR. No se inserta nada en `people`.
+    if (policy.personCreation !== "when_valid_dni" || !submissionDni(coreValues)) {
+      await db.updateTable("form_submissions").set({ match_result: "unlinked", processed_at: new Date() }).where("id", "=", submissionId).execute();
       return;
     }
     const personId = await createPersonFromSubmission(coreValues, customValues, ownerOrganizationId);
@@ -175,11 +194,12 @@ async function processSubmission(
       .set({ match_result: "created", person_id: personId, processed_at: new Date() })
       .where("id", "=", submissionId)
       .execute();
+    await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_person_created", person_id: personId, recorded_by: null, details: { policy: "when_valid_dni" } }]);
     await applyActions(schema, personId, normalizedValues);
     return;
   }
 
-  // Un envío público nunca escribe sobre una persona de otra unidad: la coincidencia con
+  // Un envío público nunca vincula ni escribe sobre una persona de otra unidad: la coincidencia con
   // alguien fuera del árbol de la unidad del formulario va a revisión, sin modificar nada.
   const outsideIds = await personIdsOutsideOrganizationTree(
     outcome.kind === "single" ? [outcome.personId] : outcome.kind === "multiple" ? outcome.personIds : [],
@@ -204,22 +224,35 @@ async function processSubmission(
   }
 
   if (outcome.kind === "single") {
-    if (schema.updatePolicy === "fill_empty_only") {
-      await mergeEmptyFieldsOnly(outcome.personId, coreValues, customValues);
-      await db
-        .updateTable("form_submissions")
-        .set({ match_result: "matched", person_id: outcome.personId, processed_at: new Date() })
-        .where("id", "=", submissionId)
-        .execute();
-      await applyActions(schema, outcome.personId, normalizedValues);
-      return;
+    // Coincidencia por email/teléfono con un DNI DISTINTO al informado: puede ser un homónimo o un contacto compartido. No se vincula sola.
+    if (identity.dni) {
+      const matched = await db.selectFrom("people").select(["dni"]).where("id", "=", outcome.personId).executeTakeFirst();
+      if (matched?.dni && matched.dni !== identity.dni) {
+        await db
+          .insertInto("person_duplicate_candidates")
+          .values({
+            person_id: outcome.personId,
+            submission_id: submissionId,
+            match_reason: `Coincide por ${outcome.matchedBy.join(", ")}, pero el DNI informado no es el de la persona: puede ser otra persona. Requiere revisión.`,
+          })
+          .execute();
+        await db.updateTable("form_submissions").set({ match_result: "needs_review", processed_at: new Date() }).where("id", "=", submissionId).execute();
+        return;
+      }
     }
-
     await db
-      .insertInto("person_duplicate_candidates")
-      .values({ person_id: outcome.personId, submission_id: submissionId, match_reason: `Coincide por ${outcome.matchedBy.join(", ")}; la política del formulario exige revisión manual.` })
+      .updateTable("form_submissions")
+      .set({ match_result: "matched", person_id: outcome.personId, processed_at: new Date() })
+      .where("id", "=", submissionId)
       .execute();
-    await db.updateTable("form_submissions").set({ match_result: "needs_review", person_id: outcome.personId, processed_at: new Date() }).where("id", "=", submissionId).execute();
+    await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_linked", person_id: outcome.personId, recorded_by: null, details: { matchedBy: outcome.matchedBy } }]);
+    if (policy.applyData === "fill_empty_only") {
+      const changes = await applyFieldsToPerson(outcome.personId, coreValues, customValues, { mode: "fill_empty" });
+      if (changes.length > 0) {
+        await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_data_applied", person_id: outcome.personId, recorded_by: null, details: { mode: "fill_empty", fields: changes } }]);
+      }
+    }
+    await applyActions(schema, outcome.personId, normalizedValues);
     return;
   }
 

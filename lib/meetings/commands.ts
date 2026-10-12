@@ -40,6 +40,7 @@ export async function createMeeting(actor: SessionUser, input: CreateMeetingInpu
       checkin_tolerance_before_minutes: input.checkinToleranceBeforeMinutes ?? 30,
       checkin_tolerance_after_minutes: input.checkinToleranceAfterMinutes ?? 60,
       allow_uninvited_checkin: input.allowUninvitedCheckin ?? false,
+      capacity: input.capacity ?? null,
       created_by: actor.id,
     })
     .returning("id")
@@ -81,6 +82,8 @@ export async function updateMeeting(actor: SessionUser, meetingId: string, input
       checkin_tolerance_before_minutes: input.checkinToleranceBeforeMinutes ?? existing.checkin_tolerance_before_minutes,
       checkin_tolerance_after_minutes: input.checkinToleranceAfterMinutes ?? existing.checkin_tolerance_after_minutes,
       allow_uninvited_checkin: input.allowUninvitedCheckin ?? existing.allow_uninvited_checkin,
+      // Solo se toca si el formulario la envió (los llamadores anteriores a 0043 no la mandan y no la pisan).
+      ...(input.capacity !== undefined ? { capacity: input.capacity } : {}),
       updated_at: new Date(),
     })
     .where("id", "=", meetingId)

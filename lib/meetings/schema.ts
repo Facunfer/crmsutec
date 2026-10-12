@@ -17,6 +17,8 @@ export const meetingInputSchema = z
     checkinToleranceBeforeMinutes: z.coerce.number().int().min(0).max(240).optional(),
     checkinToleranceAfterMinutes: z.coerce.number().int().min(0).max(240).optional(),
     allowUninvitedCheckin: z.coerce.boolean().optional(),
+    // Capacidad BLANDA (0043): informativa; superarla advierte pero no bloquea. Vacío = sin capacidad definida.
+    capacity: z.preprocess((v) => (v === "" || v === null ? undefined : v), z.coerce.number().int().min(1, "La capacidad debe ser un entero positivo.").max(1000000).optional()),
   })
   .refine(
     (data) => parseLocalDateTimeInBusinessTz(data.endsAt) > parseLocalDateTimeInBusinessTz(data.startsAt),
@@ -46,5 +48,6 @@ export function parseMeetingForm(formData: FormData): MeetingInput {
       ? String(formData.get("checkinToleranceAfterMinutes"))
       : undefined,
     allowUninvitedCheckin: formData.has("allowUninvitedCheckin") ? formData.get("allowUninvitedCheckin") === "true" : undefined,
+    capacity: formData.has("capacity") ? String(formData.get("capacity")) : undefined,
   });
 }

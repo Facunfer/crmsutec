@@ -131,6 +131,17 @@ async function insertEvents(
 export interface EnrollmentResult {
   /** false = ya estaba (reintento / doble clic / otra solicitud ganó la carrera): no se escribió nada ni se registró evento. */
   changed: boolean;
+  /** Fila canónica de la inscripción (nueva o ya existente vigente). */
+  participationId?: string;
+  /** Capacidad BLANDA (0043): si con esta inscripción se supera, avisa. NUNCA bloquea a un operador autorizado. */
+  capacityWarning?: { capacity: number; registered: number };
+}
+
+/** Uso interno (lib/forms): inscripción originada en una respuesta de formulario. El canal `form` no se ofrece a la carga manual. */
+export interface EnrollmentInternalOptions {
+  fromFormSubmission?: boolean;
+  /** Se ejecuta DENTRO de la misma transacción (provenance atómica con la inscripción). */
+  afterEnroll?: (trx: Trx, result: { participationId: string; changed: boolean }) => Promise<void>;
 }
 
 /**
@@ -141,18 +152,20 @@ export interface EnrollmentResult {
  */
 export async function enrollPerson(
   actor: SessionUser,
-  input: { meetingId: string; personId: string; channel: string; when: EnrollmentWhen; reason?: string }
+  input: { meetingId: string; personId: string; channel: string; when: EnrollmentWhen; reason?: string },
+  internal: EnrollmentInternalOptions = {}
 ): Promise<EnrollmentResult> {
   await authorizeMeeting(actor, input.meetingId);
   if (!isUuid(input.personId)) throw new RegistrationError("La persona no existe.");
-  if (!isInvitationChannel(input.channel)) {
+  const isForm = input.channel === "form" && internal.fromFormSubmission === true;
+  if (!isForm && !isInvitationChannel(input.channel)) {
     throw new RegistrationError(`Canal de inscripción inválido. Opciones: ${INVITATION_CHANNELS.join(", ")}.`);
   }
-  const channel: RegistrationChannel = input.channel;
+  const channel: RegistrationChannel = input.channel as RegistrationChannel;
 
   const db = await getDb();
   return db.transaction().execute(async (trx) => {
-    const meeting = await trx.selectFrom("meetings").select(["status"]).where("id", "=", input.meetingId).executeTakeFirst();
+    const meeting = await trx.selectFrom("meetings").select(["status", "capacity"]).where("id", "=", input.meetingId).executeTakeFirst();
     if (!meeting) throw new RegistrationError("La reunión no existe.");
     if (meeting.status === "cancelled") throw new RegistrationError("No se puede inscribir en una reunión cancelada.");
     const retroactive = meeting.status === "finished";
@@ -186,13 +199,14 @@ export async function enrollPerson(
     if (!inserted) {
       const existing = await trx
         .selectFrom("meeting_participations")
-        .select(["voided_at"])
+        .select(["id", "voided_at"])
         .where("meeting_id", "=", input.meetingId)
         .where("person_id", "=", input.personId)
         .where("participation_kind", "=", "registration")
         .executeTakeFirst();
       if (existing?.voided_at) throw new RegistrationError("La inscripción de esta persona fue anulada: restaurala (no se crea una segunda).");
-      return { changed: false };
+      if (existing && internal.afterEnroll) await internal.afterEnroll(trx, { participationId: existing.id, changed: false });
+      return { changed: false, participationId: existing?.id };
     }
     await insertEvents(trx, [
       {
@@ -200,7 +214,14 @@ export async function enrollPerson(
         origin_channel: channel, registered_at: when.registeredAt, registered_at_precision: when.precision,
       },
     ]);
-    return { changed: true };
+    if (internal.afterEnroll) await internal.afterEnroll(trx, { participationId: inserted.id, changed: true });
+    // Capacidad blanda: se informa, no se bloquea (personas distintas con inscripción vigente en esta reunión).
+    let capacityWarning: EnrollmentResult["capacityWarning"];
+    if (meeting.capacity !== null && meeting.capacity !== undefined) {
+      const n = (await sql<{ n: number }>`select count(distinct person_id)::int n from meeting_participations where meeting_id = ${input.meetingId}::uuid and participation_kind = 'registration' and voided_at is null`.execute(trx)).rows[0]!.n;
+      if (n > meeting.capacity) capacityWarning = { capacity: meeting.capacity, registered: n };
+    }
+    return { changed: true, participationId: inserted.id, capacityWarning };
   });
 }
 

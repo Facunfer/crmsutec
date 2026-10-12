@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { dateOnly } from "../db/date-only.js";
 import { assertServerOnly } from "../server-only.js";
@@ -84,31 +85,97 @@ export async function createPersonFromSubmission(
   return created.id;
 }
 
-/** update_policy=fill_empty_only (y resolución manual "vincular"): nunca pisa un dato que la persona ya tenía. */
-export async function mergeEmptyFieldsOnly(personId: string, coreValues: Record<string, unknown>, customValues: Record<string, unknown>): Promise<void> {
-  const db = await getDb();
-  const existing = await db.selectFrom("people").selectAll().where("id", "=", personId).executeTakeFirst();
-  if (!existing) return;
+/** Campos núcleo de la persona que un envío puede completar. NUNCA el DNI ni el nombre: son identidad. */
+const APPLICABLE_CORE_KEYS = ["email", "phone", "birth_date"] as const;
 
-  const patch: Record<string, unknown> = {};
-  if (!existing.email && coreValues.email) patch.email = coreValues.email;
-  if (!existing.phone && coreValues.phone) patch.phone = coreValues.phone;
-  if (!existing.birth_date && coreValues.birth_date) patch.birth_date = dateOnly(String(coreValues.birth_date).slice(0, 10));
+export interface AppliedChange {
+  key: string;
+  before: unknown;
+  after: unknown;
+}
+
+function isEmptyValue(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}
+
+export interface FieldChangePlan {
+  changes: AppliedChange[];
+  /** Columnas núcleo a escribir (ya normalizadas). */
+  corePatch: Record<string, unknown>;
+  /** Objeto custom_fields completo resultante, o null si no cambia ningún campo personalizado. */
+  customFields: Record<string, unknown> | null;
+}
+
+/**
+ * Planifica (sin escribir) qué cambios produciría aplicar un envío a una persona:
+ *  - `fill_empty`: solo completa lo que la persona tiene vacío (nunca pisa);
+ *  - `overwrite`: reemplaza los campos pedidos en `keys` (acto deliberado de un operador).
+ * Función pura: la usan el procesamiento automático y los comandos explícitos para que las reglas sean las mismas.
+ */
+export function planFieldChanges(
+  existing: Record<string, unknown>,
+  coreValues: Record<string, unknown>,
+  customValues: Record<string, unknown>,
+  options: { mode: "fill_empty" | "overwrite"; keys?: readonly string[] }
+): FieldChangePlan {
+  const wanted = options.keys ? new Set(options.keys) : null;
+  const changes: AppliedChange[] = [];
+  const corePatch: Record<string, unknown> = {};
+
+  for (const key of APPLICABLE_CORE_KEYS) {
+    if (wanted && !wanted.has(key)) continue;
+    const incoming = coreValues[key];
+    if (isEmptyValue(incoming)) continue;
+    const current = existing[key];
+    if (options.mode === "fill_empty" && !isEmptyValue(current)) continue;
+    const same = key === "birth_date" ? String(current ?? "").slice(0, 10) === String(incoming).slice(0, 10) : current === incoming;
+    if (same) continue;
+    const after = key === "birth_date" ? String(incoming).slice(0, 10) : incoming;
+    changes.push({ key, before: current instanceof Date ? current.toISOString().slice(0, 10) : (current ?? null), after });
+    corePatch[key] = key === "birth_date" ? dateOnly(String(incoming).slice(0, 10)) : incoming;
+  }
 
   const existingCustom = (existing.custom_fields ?? {}) as Record<string, unknown>;
   const mergedCustom = { ...existingCustom };
   let customChanged = false;
   for (const [key, value] of Object.entries(customValues)) {
-    if (existingCustom[key] === undefined || existingCustom[key] === null || existingCustom[key] === "") {
-      mergedCustom[key] = value;
-      customChanged = true;
-    }
+    if (wanted && !wanted.has(key)) continue;
+    if (isEmptyValue(value)) continue;
+    const current = existingCustom[key];
+    if (options.mode === "fill_empty" && !isEmptyValue(current)) continue;
+    if (JSON.stringify(current) === JSON.stringify(value)) continue;
+    changes.push({ key, before: current ?? null, after: value });
+    mergedCustom[key] = value;
+    customChanged = true;
   }
-  if (customChanged) patch.custom_fields = toJsonb(mergedCustom as never);
+  return { changes, corePatch, customFields: customChanged ? mergedCustom : null };
+}
 
-  if (Object.keys(patch).length === 0) return;
-  patch.updated_at = new Date();
-  await db.updateTable("people").set(patch).where("id", "=", personId).execute();
+/** Aplica el plan a la persona con su propia conexión (camino automático). Sin cambios no escribe nada. */
+export async function applyFieldsToPerson(
+  personId: string,
+  coreValues: Record<string, unknown>,
+  customValues: Record<string, unknown>,
+  options: { mode: "fill_empty" | "overwrite"; keys?: readonly string[] }
+): Promise<AppliedChange[]> {
+  const db = await getDb();
+  const existing = await db.selectFrom("people").selectAll().where("id", "=", personId).executeTakeFirst();
+  if (!existing) return [];
+  const plan = planFieldChanges(existing as unknown as Record<string, unknown>, coreValues, customValues, options);
+  if (plan.changes.length === 0) return [];
+  const patch: Record<string, unknown> = { ...plan.corePatch, updated_at: new Date() };
+  if (plan.customFields) patch.custom_fields = toJsonb(plan.customFields as never);
+  await db
+    .updateTable("people")
+    .set({ ...patch, version: sql<number>`version + 1` } as never)
+    .where("id", "=", personId)
+    .execute();
+  return plan.changes;
+}
+
+/** Atajo histórico: completa solo vacíos. Devuelve los cambios aplicados. */
+export async function mergeEmptyFieldsOnly(personId: string, coreValues: Record<string, unknown>, customValues: Record<string, unknown>): Promise<AppliedChange[]> {
+  return applyFieldsToPerson(personId, coreValues, customValues, { mode: "fill_empty" });
 }
 
 export async function applyActions(schema: FormVersionSchema, personId: string, normalizedValues: Record<string, unknown>): Promise<void> {

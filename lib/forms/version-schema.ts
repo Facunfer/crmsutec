@@ -1,4 +1,5 @@
 import type { PersonFieldType } from "../db/schema.js";
+import type { FieldValidation } from "./field-types.js";
 
 /**
  * Forma del snapshot inmutable que se guarda en `form_versions.schema` al
@@ -17,6 +18,9 @@ export interface FormVersionField {
   visible: boolean;
   sortOrder: number;
   personFieldMapping: string | null;
+  /** 0043 (opcionales: los snapshots anteriores no los traen). */
+  description?: string | null;
+  validation?: FieldValidation;
 }
 
 export interface FormVersionAction {
@@ -29,7 +33,8 @@ export interface FormVersionSchema {
   consentText: string | null;
   successMessage: string | null;
   identificationPolicy: { matchFields: Array<"dni" | "email" | "phone"> };
-  updatePolicy: "fill_empty_only" | "always_flag_for_review";
+  /** LEGADO (anterior a 0043): ya no se lee; las políticas vigentes viven en `forms` (person_creation_policy / apply_data_policy). */
+  updatePolicy?: "fill_empty_only" | "always_flag_for_review";
   fields: FormVersionField[];
   actions: FormVersionAction[];
 }

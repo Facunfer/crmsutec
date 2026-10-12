@@ -16,7 +16,7 @@ const { PERMISSIONS } = await import("../../lib/permissions/catalog.js");
 const { createPerson, updatePerson, PersonCommandError } = await import("../../lib/people/commands.js");
 const { createForm, updateFormMeta, upsertField, publishForm } = await import("../../lib/forms/commands.js");
 const { submitForm } = await import("../../lib/forms/submit.js");
-const { createNewFromCandidate } = await import("../../lib/forms/duplicates.js");
+const { createPersonFromUnlinkedSubmission } = await import("../../lib/forms/submissions.js");
 const { listPendingDuplicateCandidates } = await import("../../lib/forms/queries.js");
 
 const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
@@ -222,7 +222,7 @@ describe("formularios: un envío sin DNI no crea personas", () => {
       opensAt: "",
       closesAt: "",
       matchFields: ["dni", "email"],
-      updatePolicy: "fill_empty_only",
+      personCreationPolicy: "when_valid_dni", applyDataPolicy: "fill_empty_only",
     });
     await upsertField(actor, id, null, { key: "first_name", label: "Nombre", fieldType: "text", required: true, visible: true, personFieldMapping: "first_name" });
     await upsertField(actor, id, null, { key: "last_name", label: "Apellido", fieldType: "text", required: true, visible: true, personFieldMapping: "last_name" });
@@ -239,7 +239,7 @@ describe("formularios: un envío sin DNI no crea personas", () => {
     return id;
   }
 
-  it("sin DNI: se conserva el form_submission en revisión, queda un candidato sin persona y NO se crea people", async () => {
+  it("sin DNI: se conserva el form_submission «sin vincular», sin persona y NO se crea people", async () => {
     await makeForm("form-sin-dni", "dni-optional");
     const before = await peopleCount();
     const result = await submitForm("form-sin-dni", { first_name: "Sin", last_name: "Documento", dni: "", email: "sin@example.com" }, randomUUID(), nextIp(), "agent");
@@ -248,14 +248,12 @@ describe("formularios: un envío sin DNI no crea personas", () => {
 
     const db = await getDb();
     const submission = await db.selectFrom("form_submissions").select(["match_result", "person_id", "raw_payload"]).orderBy("created_at", "desc").executeTakeFirstOrThrow();
-    expect(submission.match_result).toBe("needs_review");
+    expect(submission.match_result).toBe("unlinked");
     expect(submission.person_id).toBeNull();
     expect(submission.raw_payload).toBeTruthy();
 
     const queue = await listPendingDuplicateCandidates(actor, true);
-    const candidate = queue.find((c) => c.matchReason.includes("DNI"));
-    expect(candidate).toBeTruthy();
-    expect(candidate!.personId).toBeNull();
+    expect(queue.find((c) => c.personId === null)).toBeUndefined();
   });
 
   it("un formulario que ni siquiera tiene campo DNI tampoco crea personas", async () => {
@@ -272,15 +270,14 @@ describe("formularios: un envío sin DNI no crea personas", () => {
     expect(await peopleCount()).toBe(before);
   });
 
-  it("desde la bandeja, 'es una persona nueva' sin DNI también se rechaza (la revisión no puede saltearse la regla)", async () => {
+  it("desde «sin vincular», crear persona nueva sin DNI también se rechaza (la acción explícita no puede saltearse la regla)", async () => {
     const db = await getDb();
-    const queue = await listPendingDuplicateCandidates(actor, true);
-    const candidate = queue.find((c) => c.personId === null)!;
+    const sub = await db.selectFrom("form_submissions").select("id").where("match_result", "=", "unlinked").orderBy("created_at", "desc").executeTakeFirstOrThrow();
     const before = await peopleCount();
-    await expect(createNewFromCandidate(actor, candidate.id)).rejects.toThrow(/DNI/);
+    await expect(createPersonFromUnlinkedSubmission(actor, { submissionId: sub.id })).rejects.toThrow(/DNI/);
     expect(await peopleCount()).toBe(before);
-    const still = await db.selectFrom("person_duplicate_candidates").select("status").where("id", "=", candidate.id).executeTakeFirstOrThrow();
-    expect(still.status).toBe("pending");
+    const still = await db.selectFrom("form_submissions").select(["match_result", "person_id"]).where("id", "=", sub.id).executeTakeFirstOrThrow();
+    expect(still).toMatchObject({ match_result: "unlinked", person_id: null });
   });
 
   it("con DNI válido sí crea la persona (origin=form, dni_source=explicit)", async () => {

@@ -3,11 +3,12 @@ import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import { toJsonb } from "../db/json.js";
 import type { SessionUser } from "../permissions/can.js";
-import { canAccessAssociation, canAccessForm } from "../scope/organizations.js";
+import { sql } from "kysely";
+import { campaignVisibility, canAccessAssociation, canAccessForm, canAccessMeeting, isUuid } from "../scope/organizations.js";
 import { canActorOwnInOrganization } from "../organizations/ownership.js";
 import type { FormStatus } from "../db/schema.js";
-import { FIELD_TYPES, isCorePersonMapping, parseFieldOptions } from "./field-types.js";
-import { parseOptionsText, type FieldInput, type FormMetaInput } from "./schema.js";
+import { FIELD_TYPES, isCorePersonMapping, parseFieldOptions, parseFieldValidation } from "./field-types.js";
+import { buildFieldValidation, parseOptionsText, type FieldInput, type FormMetaInput } from "./schema.js";
 import type { FormVersionSchema } from "./version-schema.js";
 import { dniPublishError } from "./publish-rules.js";
 
@@ -58,9 +59,53 @@ async function requireEditableForm(actor: SessionUser, formId: string): Promise<
   return form;
 }
 
+/**
+ * Valida y resuelve los vínculos de un formulario (0043). Reglas:
+ *  - la campaña tiene que ser visible para el usuario;
+ *  - la reunión tiene que estar dentro de su alcance; si además hay campaña, la reunión pertenece a ESA campaña;
+ *  - con solo la reunión, la campaña se deriva de la reunión (nunca queda incoherente);
+ *  - la jornada por defecto exige campaña, pertenece a ella y no convive con una reunión fija.
+ * Un formulario con campaña y SIN jornada elegida nunca decide solo a qué jornada inscribir.
+ */
+async function resolveFormLinks(
+  actor: SessionUser,
+  input: { campaignId?: string; meetingId?: string; defaultMeetingId?: string }
+): Promise<{ campaignId: string | null; meetingId: string | null; defaultMeetingId: string | null }> {
+  const db = await getDb();
+  let campaignId = input.campaignId?.trim() || null;
+  const meetingId = input.meetingId?.trim() || null;
+  const defaultMeetingId = input.defaultMeetingId?.trim() || null;
+
+  if (campaignId) {
+    if (!isUuid(campaignId)) throw new FormCommandError("La campaña no existe.");
+    const ok = await sql<{ ok: boolean }>`select exists (select 1 from campaigns c where c.id = ${campaignId}::uuid and ${campaignVisibility(actor)}) as ok`.execute(db);
+    if (!ok.rows[0]?.ok) throw new FormCommandError("La campaña no existe.");
+  }
+  const meetingCampaign = async (id: string): Promise<string | null> => {
+    if (!isUuid(id) || !(await canAccessMeeting(actor, id))) throw new FormCommandError("La reunión no existe.");
+    const row = await db.selectFrom("meetings").select(["campaign_id"]).where("id", "=", id).executeTakeFirst();
+    if (!row) throw new FormCommandError("La reunión no existe.");
+    return row.campaign_id;
+  };
+
+  if (meetingId && defaultMeetingId) throw new FormCommandError("Elegí una reunión fija o una jornada por defecto de la campaña, no las dos.");
+  if (meetingId) {
+    const mc = await meetingCampaign(meetingId);
+    if (campaignId && mc !== campaignId) throw new FormCommandError("La reunión no pertenece a la campaña elegida.");
+    campaignId = campaignId ?? mc;
+  }
+  if (defaultMeetingId) {
+    if (!campaignId) throw new FormCommandError("La jornada por defecto requiere elegir una campaña.");
+    const mc = await meetingCampaign(defaultMeetingId);
+    if (mc !== campaignId) throw new FormCommandError("La jornada por defecto no pertenece a la campaña elegida.");
+  }
+  return { campaignId, meetingId, defaultMeetingId };
+}
+
 export async function updateFormMeta(actor: SessionUser, formId: string, input: FormMetaInput): Promise<void> {
   assertPermission(actor, "forms.edit");
   await requireEditableForm(actor, formId);
+  const links = await resolveFormLinks(actor, input);
 
   const db = await getDb();
   const slug = input.slug.trim().toLowerCase();
@@ -77,7 +122,12 @@ export async function updateFormMeta(actor: SessionUser, formId: string, input: 
       opens_at: toDateOrNull(input.opensAt),
       closes_at: toDateOrNull(input.closesAt),
       identification_policy: toJsonb({ matchFields: input.matchFields }),
-      update_policy: input.updatePolicy,
+      description: input.description?.trim() || null,
+      person_creation_policy: input.personCreationPolicy,
+      apply_data_policy: input.applyDataPolicy,
+      campaign_id: links.campaignId,
+      meeting_id: links.meetingId,
+      default_meeting_id: links.defaultMeetingId,
       updated_at: new Date(),
     })
     .where("id", "=", formId)
@@ -100,6 +150,7 @@ export async function upsertField(actor: SessionUser, formId: string, fieldId: s
 
   const db = await getDb();
   const options = toJsonb(parseOptionsText(input.optionsText ?? "") as never);
+  const validation = buildFieldValidation(input);
 
   if (fieldId) {
     const updated = await db
@@ -112,6 +163,8 @@ export async function upsertField(actor: SessionUser, formId: string, fieldId: s
         required: input.required,
         visible: input.visible,
         person_field_mapping: input.personFieldMapping?.trim() || null,
+        description: input.description?.trim() || null,
+        validation: validation ? toJsonb(validation as never) : null,
       })
       .where("id", "=", fieldId)
       .where("form_id", "=", formId)
@@ -142,6 +195,8 @@ export async function upsertField(actor: SessionUser, formId: string, fieldId: s
       visible: input.visible,
       sort_order: (maxSort?.max ?? 0) + 1,
       person_field_mapping: input.personFieldMapping?.trim() || null,
+      description: input.description?.trim() || null,
+      validation: validation ? toJsonb(validation as never) : null,
     })
     .returning("id")
     .executeTakeFirstOrThrow();
@@ -235,7 +290,6 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
     consentText: form.consent_text,
     successMessage: form.success_message,
     identificationPolicy: { matchFields: (policy.matchFields ?? ["dni", "email", "phone"]) as Array<"dni" | "email" | "phone"> },
-    updatePolicy: form.update_policy,
     fields: fields.map((f) => ({
       key: f.key,
       label: f.label,
@@ -245,6 +299,8 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
       visible: f.visible,
       sortOrder: f.sort_order,
       personFieldMapping: f.person_field_mapping,
+      description: f.description,
+      validation: parseFieldValidation(f.validation),
     })),
     actions: actions.map((a) => ({ actionType: a.action_type, config: (a.config ?? {}) as { associationId?: string } })),
   };

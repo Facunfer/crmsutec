@@ -13,7 +13,7 @@ import {
   updateFormMeta,
   upsertField,
 } from "@/lib/forms/commands";
-import { formMetaInputSchema, fieldInputSchema, type FieldInput, type FormMetaInput } from "@/lib/forms/schema";
+import { parseFieldForm, parseFormMetaForm, type FieldInput, type FormMetaInput } from "@/lib/forms/schema";
 import { z } from "zod";
 
 export interface ActionResult {
@@ -28,16 +28,7 @@ function toMessage(err: unknown, fallback: string): string {
 }
 
 function parseMetaFromForm(formData: FormData): FormMetaInput {
-  return formMetaInputSchema.parse({
-    name: String(formData.get("name") ?? ""),
-    slug: String(formData.get("slug") ?? ""),
-    consentText: String(formData.get("consentText") ?? ""),
-    successMessage: String(formData.get("successMessage") ?? ""),
-    opensAt: String(formData.get("opensAt") ?? ""),
-    closesAt: String(formData.get("closesAt") ?? ""),
-    matchFields: formData.getAll("matchFields").map(String),
-    updatePolicy: String(formData.get("updatePolicy") ?? "fill_empty_only"),
-  });
+  return parseFormMetaForm(formData);
 }
 
 export async function updateFormMetaAction(formId: string, _prevState: ActionResult, formData: FormData): Promise<ActionResult> {
@@ -53,15 +44,7 @@ export async function updateFormMetaAction(formId: string, _prevState: ActionRes
 }
 
 function parseFieldFromForm(formData: FormData): FieldInput {
-  return fieldInputSchema.parse({
-    key: String(formData.get("key") ?? ""),
-    label: String(formData.get("label") ?? ""),
-    fieldType: String(formData.get("fieldType") ?? ""),
-    optionsText: String(formData.get("optionsText") ?? ""),
-    required: formData.get("required") === "true",
-    visible: formData.get("visible") === "true",
-    personFieldMapping: String(formData.get("personFieldMapping") ?? ""),
-  });
+  return parseFieldForm(formData);
 }
 
 export async function upsertFieldAction(formId: string, fieldId: string | null, _prevState: ActionResult, formData: FormData): Promise<ActionResult> {

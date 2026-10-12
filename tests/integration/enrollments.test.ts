@@ -130,7 +130,7 @@ describe("B4 · inscripción manual (clase A)", () => {
     const m = await meeting("scheduled");
     const p = await person();
     const before = { inv: await countOf("meeting_invitations"), att: await countOf("meeting_attendance"), itx: await countOf("person_interactions"), part: await countOf("meeting_participations") };
-    expect(await enroll(culturaOp, m, p, { channel: "phone" })).toEqual({ changed: true });
+    expect(await enroll(culturaOp, m, p, { channel: "phone" })).toMatchObject({ changed: true });
     const [r] = await regRows(m, p);
     expect(r).toMatchObject({
       participation_kind: "registration", participation_basis: "standard", recorded_by: culturaOp.id, origin_channel: "phone", origin_invitation_id: null,
@@ -169,14 +169,14 @@ describe("B4 · inscripción manual (clase A)", () => {
   it("estados: draft, scheduled e in_progress sí; finished solo retroactiva (sin «ahora», con motivo); cancelled no", async () => {
     for (const status of ["draft", "scheduled", "in_progress"] as const) {
       const m = await meeting(status);
-      expect(await enroll(culturaOp, m, await person())).toEqual({ changed: true });
+      expect(await enroll(culturaOp, m, await person())).toMatchObject({ changed: true });
     }
     const fin = await meeting("finished");
     const p = await person();
     await expect(enroll(culturaOp, fin, p)).rejects.toThrow(/motivo|retroactiva/);
     await expect(enroll(culturaOp, fin, p, { when: { kind: "date_only", day: "2026-03-10" } })).rejects.toThrow(/motivo/);
     await expect(enroll(culturaOp, fin, p, { when: { kind: "now" }, reason: "carga tardía" })).rejects.toThrow(/retroactiva/);
-    expect(await enroll(culturaOp, fin, p, { when: { kind: "date_only", day: "2026-03-10" }, reason: "carga tardía de la planilla" })).toEqual({ changed: true });
+    expect(await enroll(culturaOp, fin, p, { when: { kind: "date_only", day: "2026-03-10" }, reason: "carga tardía de la planilla" })).toMatchObject({ changed: true });
     const [r] = await regRows(fin, p);
     expect((await events(r!.id))[0]).toMatchObject({ event_type: "registered", reason: "carga tardía de la planilla" });
     await expect(enroll(culturaOp, await meeting("cancelled"), await person())).rejects.toThrow(/cancelada/);
@@ -204,7 +204,7 @@ describe("B4 · inscripción manual (clase A)", () => {
     await expect(enroll(haciendaOp, m, mine)).rejects.toThrow(/no existe/);
     await expect(enroll(culturaOp, m, other)).rejects.toThrow(/no existe/);
     await expect(enroll(culturaOp, m, noOrg)).rejects.toThrow(/no existe/);
-    expect(await enroll(master, m, noOrg)).toEqual({ changed: true });
+    expect(await enroll(master, m, noOrg)).toMatchObject({ changed: true });
     expect(await regRows(m, other)).toHaveLength(0);
     expect(await regRows(m, mine)).toHaveLength(0);
   });

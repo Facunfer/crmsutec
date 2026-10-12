@@ -3,7 +3,8 @@ import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import type { SessionUser } from "../permissions/can.js";
 import { isCorePersonMapping } from "./field-types.js";
-import { applyActions, createPersonFromSubmission, FormApplyError, mergeEmptyFieldsOnly, splitCoreAndCustomValues } from "./apply.js";
+import { applyActions, createPersonFromSubmission, FormApplyError, splitCoreAndCustomValues } from "./apply.js";
+import { insertSubmissionEvents } from "./events.js";
 import type { FormVersionSchema } from "./version-schema.js";
 import { canAccessForm, canAccessPerson } from "../scope/organizations.js";
 import { isMasterGlobal } from "../permissions/can.js";
@@ -55,7 +56,10 @@ async function discardSiblingCandidates(db: Awaited<ReturnType<typeof getDb>>, s
     .execute();
 }
 
-/** "Sí, es esta persona": aplica fill-empty-only y las acciones, igual que un match automático confirmado a mano. */
+/**
+ * "Sí, es esta persona": VINCULA la respuesta a la persona propuesta y ejecuta las acciones configuradas del formulario (asociaciones).
+ * Desde 0043 NO completa datos de la persona: aplicar datos es una acción explícita aparte (`applySubmissionData`).
+ */
 export async function linkDuplicateCandidate(actor: SessionUser, candidateId: string): Promise<void> {
   assertPermission(actor, "forms.review_duplicates");
   const { db, candidate, submission, schema, normalizedValues, coreValues, customValues } = await loadCandidateContext(actor, candidateId);
@@ -65,7 +69,6 @@ export async function linkDuplicateCandidate(actor: SessionUser, candidateId: st
     throw new DuplicateResolutionError("La persona propuesta pertenece a otra unidad; no se puede vincular desde acá.");
   }
 
-  await mergeEmptyFieldsOnly(candidate.person_id, coreValues, customValues);
   await applyActions(schema, candidate.person_id, normalizedValues);
 
   await db
@@ -74,6 +77,7 @@ export async function linkDuplicateCandidate(actor: SessionUser, candidateId: st
     .where("id", "=", candidateId)
     .execute();
   await db.updateTable("form_submissions").set({ match_result: "matched", person_id: candidate.person_id }).where("id", "=", submission.id).execute();
+  await insertSubmissionEvents(db, [{ submission_id: submission.id, event_type: "linked", person_id: candidate.person_id, recorded_by: actor.id, details: { candidateId } }]);
   await discardSiblingCandidates(db, submission.id, candidateId, actor);
 
 }
@@ -102,6 +106,7 @@ export async function createNewFromCandidate(actor: SessionUser, candidateId: st
     .where("id", "=", candidateId)
     .execute();
   await db.updateTable("form_submissions").set({ match_result: "created", person_id: personId }).where("id", "=", submission.id).execute();
+  await insertSubmissionEvents(db, [{ submission_id: submission.id, event_type: "person_created", person_id: personId, recorded_by: actor.id, details: { candidateId } }]);
   await discardSiblingCandidates(db, submission.id, candidateId, actor);
 
 
@@ -120,4 +125,11 @@ export async function discardDuplicateCandidate(actor: SessionUser, candidateId:
     .where("id", "=", candidateId)
     .execute();
 
+  // Sin persona y sin otros candidatos pendientes: la respuesta pasa a «sin vincular» (el operador puede vincularla o crear la persona).
+  if (candidate.submission_id) {
+    const stillPending = await db.selectFrom("person_duplicate_candidates").select("id").where("submission_id", "=", candidate.submission_id).where("status", "=", "pending").executeTakeFirst();
+    if (!stillPending) {
+      await db.updateTable("form_submissions").set({ match_result: "unlinked" }).where("id", "=", candidate.submission_id).where("person_id", "is", null).where("match_result", "=", "needs_review").execute();
+    }
+  }
 }

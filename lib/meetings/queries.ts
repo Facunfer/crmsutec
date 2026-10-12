@@ -172,6 +172,8 @@ export interface MeetingDetail {
   /** Campaña a la que pertenece esta jornada (0036), con su nombre; null si no pertenece a ninguna. */
   campaign: { id: string; name: string } | null;
   meetingType: string;
+  /** Capacidad blanda (0043); null = sin definir. */
+  capacity: number | null;
 }
 
 /** null si no existe O está fuera del alcance del usuario (no se distingue). */
@@ -199,6 +201,7 @@ export async function getMeetingById(actor: SessionUser, id: string): Promise<Me
       "meetings.created_at",
       "meetings.source_event_key",
       "meetings.meeting_type",
+      "meetings.capacity",
       sql<string | null>`meetings.campaign_id`.as("campaign_id"),
       sql<string | null>`(select cn.name from campaigns cn where cn.id = meetings.campaign_id)`.as("campaign_name"),
     ])
@@ -227,6 +230,7 @@ export async function getMeetingById(actor: SessionUser, id: string): Promise<Me
     sourceEventKey: row.source_event_key,
     campaign: row.campaign_id && row.campaign_name ? { id: row.campaign_id, name: row.campaign_name } : null,
     meetingType: row.meeting_type,
+    capacity: row.capacity,
   };
 }
 
