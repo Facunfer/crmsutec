@@ -39,9 +39,25 @@ export interface AccountStatus {
 
 export type IdentityStatus = "pending" | "verified" | "failed" | "unknown";
 
+/**
+ * Resultado de consultar UNA identidad al proveedor, con lo necesario para explicárselo al operador.
+ *  - verified / pending / failed: respuesta DEFINITIVA del proveedor (se persiste).
+ *  - error: no se pudo consultar (permisos, red, región…): NO se toca el estado guardado y el error se muestra.
+ */
+export interface IdentityCheck {
+  identity: string;
+  region: string | null;
+  outcome: "verified" | "pending" | "failed" | "error";
+  /** Código del proveedor (NotFoundException, AccessDeniedException…) cuando lo hubo. */
+  code?: string;
+  /** Texto para el operador (sin credenciales). */
+  message: string;
+}
+
 export interface MailProvider {
   readonly name: "ses";
   send(message: OutboundMessage, options?: { configurationSet?: string | null }): Promise<SendOutcome>;
   getAccountStatus(): Promise<AccountStatus>;
   getIdentityStatus(identity: string): Promise<IdentityStatus>;
+  checkIdentity(identity: string): Promise<IdentityCheck>;
 }

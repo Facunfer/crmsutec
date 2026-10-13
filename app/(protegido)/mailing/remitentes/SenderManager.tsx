@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { saveSenderAction, verifySenderAction, type SenderFormInput } from "../acciones";
+import { saveSenderAction, verifySenderAction, type SenderFormInput, type VerifySenderResult } from "../acciones";
 
 interface SenderItem {
   id: string;
@@ -26,14 +26,17 @@ export function SenderManager({
   senders,
   organizations,
   canCreateGlobal,
+  region = null,
 }: {
   senders: SenderItem[];
   organizations: Array<{ id: string; label: string }>;
   canCreateGlobal: boolean;
+  region?: string | null;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<SenderFormInput | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [checked, setChecked] = useState<{ senderName: string; result: VerifySenderResult } | null>(null);
   const [pending, startTransition] = useTransition();
   const orgName = new Map(organizations.map((o) => [o.id, o.label]));
 
@@ -48,12 +51,14 @@ export function SenderManager({
       } else setError(r.error ?? "No se pudo guardar.");
     });
   }
-  function verify(id: string) {
+  function verify(id: string, senderName: string) {
     setError(null);
+    setChecked(null);
     startTransition(async () => {
       const r = await verifySenderAction(id);
-      if (r.ok) router.refresh();
-      else setError(r.error ?? "No se pudo verificar.");
+      // Siempre se muestra el resultado de la consulta (también «sigue pendiente»): nunca falla en silencio.
+      setChecked({ senderName, result: r });
+      router.refresh();
     });
   }
   const input = "w-full rounded-md border border-brand-200 px-2 py-1.5 text-sm";
@@ -61,6 +66,19 @@ export function SenderManager({
   return (
     <div className="space-y-4">
       {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
+      {pending ? <p className="rounded-md bg-brand-50 px-3 py-2 text-sm text-brand-700">Consultando a Amazon SES…</p> : null}
+      {checked ? (
+        <p
+          role="status"
+          className={`rounded-md px-3 py-2 text-sm ${
+            checked.result.outcome === "verified" ? "bg-green-50 text-green-800" : checked.result.outcome === "error" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900"
+          }`}
+        >
+          <strong>{checked.senderName}:</strong> {checked.result.detail ?? checked.result.error ?? "Sin respuesta."}
+          {checked.result.identity ? ` (identidad consultada: ${checked.result.identity}${checked.result.region ? ` · región ${checked.result.region}` : ""})` : ""}
+        </p>
+      ) : null}
+      {region ? <p className="text-xs text-brand-500">Región de Amazon SES configurada en el CRM: {region}.</p> : null}
       <div className="overflow-x-auto rounded-lg bg-white p-4 shadow-sm">
         <table className="min-w-full text-left text-sm">
           <thead>
@@ -83,10 +101,16 @@ export function SenderManager({
                   {s.fromName} &lt;{s.fromEmail}&gt;
                 </td>
                 <td className="py-1.5 pr-4">{s.ownerOrganizationId ? orgName.get(s.ownerOrganizationId) ?? "—" : "Global"}</td>
-                <td className="py-1.5 pr-4">{STATUS_LABEL[s.verifiedStatus] ?? s.verifiedStatus}</td>
+                <td className="py-1.5 pr-4">
+                  {STATUS_LABEL[s.verifiedStatus] ?? s.verifiedStatus}
+                  <span className="block text-[11px] text-brand-400">
+                    {s.providerIdentity ?? s.fromEmail}
+                    {s.verifiedCheckedAt ? ` · consultado ${new Date(s.verifiedCheckedAt).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", dateStyle: "short", timeStyle: "short" })}` : " · sin consultar"}
+                  </span>
+                </td>
                 <td className="py-1.5 pr-4">{s.active ? "Activo" : "Inactivo"}</td>
                 <td className="py-1.5 pr-4 text-right">
-                  <button type="button" className="mr-3 text-brand-600 hover:underline" disabled={pending} onClick={() => verify(s.id)}>
+                  <button type="button" className="mr-3 text-brand-600 hover:underline disabled:opacity-50" disabled={pending} onClick={() => verify(s.id, s.name)}>
                     verificar en SES
                   </button>
                   <button

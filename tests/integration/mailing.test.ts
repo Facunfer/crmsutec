@@ -66,6 +66,10 @@ class FakeProvider {
   async getIdentityStatus() {
     return this.identity;
   }
+  async checkIdentity(identity: string) {
+    const outcome = this.identity === "unknown" ? "error" : this.identity;
+    return { identity, region: "us-east-1", outcome, message: `${identity}: ${outcome}` };
+  }
 }
 let provider: FakeProvider;
 

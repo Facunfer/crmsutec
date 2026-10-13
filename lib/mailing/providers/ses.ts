@@ -1,7 +1,7 @@
 import { GetAccountCommand, GetEmailIdentityCommand, SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import { assertServerOnly } from "../../server-only.js";
 import { loadMailConfig } from "../config.js";
-import type { AccountStatus, IdentityStatus, MailProvider, OutboundMessage, SendOutcome } from "./types.js";
+import type { AccountStatus, IdentityCheck, IdentityStatus, MailProvider, OutboundMessage, SendOutcome } from "./types.js";
 
 assertServerOnly("lib/mailing/providers/ses.ts");
 
@@ -49,6 +49,30 @@ export function classifySesError(err: unknown): SendOutcome {
   }
   // Timeouts, cortes de red, 5xx, errores desconocidos: puede que SES haya aceptado. NO se reintenta sola.
   return { kind: "unknown", code: name, message };
+}
+
+/** Traduce el error de GetEmailIdentity a una explicación accionable. Pura (testeable). */
+export function classifyIdentityError(err: unknown, identity: string, region: string | null): IdentityCheck {
+  const e = (err ?? {}) as AwsLikeError;
+  const code = e.name ?? "Error";
+  const where = region ? `la región ${region}` : "la región configurada";
+  if (code === "NotFoundException") {
+    return {
+      identity, region, outcome: "pending", code,
+      message: `Amazon SES no tiene la identidad «${identity}» en ${where}. Revisá que AWS_REGION del CRM sea la región donde está verificada y que las credenciales sean de esa cuenta.`,
+    };
+  }
+  if (/AccessDenied|Unauthorized|Forbidden|UnrecognizedClient|InvalidSignature|ExpiredToken/i.test(code)) {
+    return {
+      identity, region, outcome: "error", code,
+      message: `Amazon SES rechazó la consulta (${code}): el usuario IAM necesita el permiso ses:GetEmailIdentity sobre la identidad en ${where}, y credenciales válidas.`,
+    };
+  }
+  if (/CredentialsProvider|CredentialsError|CredentialProvider/i.test(code)) {
+    return { identity, region, outcome: "error", code, message: "El CRM no tiene credenciales de AWS válidas (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)." };
+  }
+  const detail = typeof e.message === "string" ? e.message.replace(/\s+/g, " ").slice(0, 160) : "sin detalle";
+  return { identity, region, outcome: "error", code, message: `No se pudo consultar a Amazon SES (${code}): ${detail}` };
 }
 
 export class SesProvider implements MailProvider {
@@ -115,18 +139,26 @@ export class SesProvider implements MailProvider {
     }
   }
 
-  async getIdentityStatus(identity: string): Promise<IdentityStatus> {
+  /** Consulta la identidad (email o dominio) tal cual está guardada: nunca adivina otra. */
+  async checkIdentity(identity: string): Promise<IdentityCheck> {
+    const region = loadMailConfig().region;
     try {
       const r = await this.getClient().send(new GetEmailIdentityCommand({ EmailIdentity: identity }));
-      if (r.VerifiedForSendingStatus) return "verified";
-      const s = r.VerificationStatus;
-      if (s === "FAILED" || s === "TEMPORARY_FAILURE") return "failed";
-      if (s === "PENDING") return "pending";
-      return "unknown";
+      if (r.VerifiedForSendingStatus) {
+        return { identity, region, outcome: "verified", message: `«${identity}» está verificada en Amazon SES (${region ?? "región configurada"}).` };
+      }
+      const s = r.VerificationStatus ?? "desconocido";
+      if (s === "FAILED" || s === "TEMPORARY_FAILURE") {
+        return { identity, region, outcome: "failed", code: s, message: `La verificación de «${identity}» falló en Amazon SES (estado ${s}). Revisá los registros DNS.` };
+      }
+      return { identity, region, outcome: "pending", code: s, message: `«${identity}» existe en Amazon SES pero todavía no está verificada (estado ${s}).` };
     } catch (err) {
-      const e = err as AwsLikeError;
-      if (e.name === "NotFoundException") return "pending";
-      return "unknown";
+      return classifyIdentityError(err, identity, region);
     }
+  }
+
+  async getIdentityStatus(identity: string): Promise<IdentityStatus> {
+    const c = await this.checkIdentity(identity);
+    return c.outcome === "error" ? "unknown" : c.outcome;
   }
 }

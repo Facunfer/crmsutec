@@ -7,6 +7,7 @@ import { isMasterGlobal, type SessionUser } from "../permissions/can.js";
 import { canAccessOrganization, isUuid, orgScope } from "../scope/organizations.js";
 import { headerSafe, normalizeEmail } from "./email.js";
 import { getMailProvider } from "./providers/index.js";
+import type { IdentityCheck } from "./providers/types.js";
 
 assertServerOnly("lib/mailing/senders.ts");
 
@@ -151,28 +152,49 @@ export async function updateSender(actor: SessionUser, id: string, input: Sender
   }
 }
 
-/** Consulta al proveedor si la identidad del remitente está verificada (email o dominio) y guarda el resultado. */
-export async function refreshSenderVerification(actor: SessionUser, id: string): Promise<SenderRow> {
+export interface SenderVerificationResult {
+  sender: SenderRow;
+  check: IdentityCheck;
+}
+
+/**
+ * Consulta al proveedor la identidad EXACTA guardada en el remitente (`provider_identity`, o su email si no tiene) y persiste el
+ * resultado. Una respuesta definitiva (verified / pending / failed) actualiza `verified_status`, `verified_at` y
+ * `verified_checked_at`. Si NO se pudo consultar (permisos, red, región), el estado guardado NO cambia —un error pasajero no
+ * des-verifica un remitente— y el error vuelve al operador en `check`.
+ */
+export async function verifySenderIdentity(actor: SessionUser, id: string): Promise<SenderVerificationResult> {
   assertPermission(actor, "mailing.manage_senders");
   const sender = await getSender(actor, id);
   if (!sender) throw new SenderError("Remitente no encontrado.");
   const provider = getMailProvider();
-  const identity = sender.providerIdentity ?? sender.fromEmail;
-  let status = await provider.getIdentityStatus(identity);
-  if (status !== "verified" && !sender.providerIdentity) {
+  const identity = (sender.providerIdentity ?? sender.fromEmail).trim();
+
+  let check = await provider.checkIdentity(identity);
+  // Sin identidad explícita, un email sin verificar puede estar cubierto por la verificación de su DOMINIO.
+  if (check.outcome !== "verified" && !sender.providerIdentity) {
     const domain = sender.fromEmail.split("@")[1];
     if (domain) {
-      const domainStatus = await provider.getIdentityStatus(domain);
-      if (domainStatus === "verified") status = "verified";
-      else if (status === "unknown") status = domainStatus;
+      const domainCheck = await provider.checkIdentity(domain);
+      if (domainCheck.outcome === "verified" || (check.outcome === "error" && domainCheck.outcome !== "error")) check = domainCheck;
     }
   }
+
   const db = await getDb();
-  await sql`
-    update mailing_senders set verified_status = ${status}, verified_checked_at = now(),
-      verified_at = case when ${status} = 'verified' then coalesce(verified_at, now()) else null end, updated_at = now()
-    where id = ${id}::uuid`.execute(db);
-  return (await getSender(actor, id))!;
+  if (check.outcome === "error") {
+    await sql`update mailing_senders set verified_checked_at = now(), updated_at = now() where id = ${id}::uuid`.execute(db);
+  } else {
+    await sql`
+      update mailing_senders set verified_status = ${check.outcome}, verified_checked_at = now(),
+        verified_at = case when ${check.outcome} = 'verified' then coalesce(verified_at, now()) else null end, updated_at = now()
+      where id = ${id}::uuid`.execute(db);
+  }
+  return { sender: (await getSender(actor, id))!, check };
+}
+
+/** Compatibilidad: devuelve solo el remitente actualizado. */
+export async function refreshSenderVerification(actor: SessionUser, id: string): Promise<SenderRow> {
+  return (await verifySenderIdentity(actor, id)).sender;
 }
 
 /** Un remitente es USABLE para enviar si es visible, está activo y verificado. */

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { isMasterGlobal } from "@/lib/permissions/can";
 import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
+import { loadMailConfig } from "@/lib/mailing/config";
 import { listSenders } from "@/lib/mailing/senders";
 import { SesBanner } from "../SesBanner";
 import { SenderManager } from "./SenderManager";
@@ -28,6 +29,7 @@ export default async function RemitentesPage() {
         senders={senders.map((s) => ({ ...s, verifiedAt: s.verifiedAt ? s.verifiedAt.toISOString() : null, verifiedCheckedAt: s.verifiedCheckedAt ? s.verifiedCheckedAt.toISOString() : null }))}
         organizations={orgs}
         canCreateGlobal={isMasterGlobal(actor)}
+        region={loadMailConfig().region}
       />
     </div>
   );

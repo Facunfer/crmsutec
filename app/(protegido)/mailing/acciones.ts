@@ -18,7 +18,7 @@ import {
   type TestSendResult,
 } from "@/lib/mailing/campaigns";
 import { resolveUnknownRecipient } from "@/lib/mailing/queries";
-import { SenderError, createSender, refreshSenderVerification, updateSender } from "@/lib/mailing/senders";
+import { SenderError, createSender, updateSender, verifySenderIdentity } from "@/lib/mailing/senders";
 import { SuppressionError, addManualSuppression, liftSuppression } from "@/lib/mailing/suppressions";
 import { loadMailConfig } from "@/lib/mailing/config";
 import { buildMergeVars, findUnknownVariables, renderMessage } from "@/lib/mailing/template";
@@ -227,14 +227,23 @@ export async function saveSenderAction(input: SenderFormInput): Promise<ActionRe
   }
 }
 
-export async function verifySenderAction(id: string): Promise<ActionResult> {
+export interface VerifySenderResult extends ActionResult {
+  /** Resultado de la consulta a SES, para mostrarlo siempre (también cuando no cambia nada). */
+  outcome?: "verified" | "pending" | "failed" | "error";
+  detail?: string;
+  identity?: string;
+  region?: string | null;
+}
+
+export async function verifySenderAction(id: string): Promise<VerifySenderResult> {
   const actor = await requireUser();
   try {
-    await refreshSenderVerification(actor, id);
+    const { check } = await verifySenderIdentity(actor, id);
     revalidatePath("/mailing/remitentes");
-    return { ok: true };
+    // `ok` significa «se pudo consultar»: un error de SES vuelve visible con ok=false y el estado guardado intacto.
+    return { ok: check.outcome !== "error", outcome: check.outcome, detail: check.message, identity: check.identity, region: check.region, error: check.outcome === "error" ? check.message : undefined };
   } catch (err) {
-    return { ok: false, error: message(err, "No se pudo verificar el remitente.") };
+    return { ok: false, outcome: "error", error: message(err, "No se pudo verificar el remitente.") };
   }
 }
 
