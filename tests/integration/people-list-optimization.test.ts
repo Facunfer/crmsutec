@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ALL_MODULE_KEYS } from "../helpers/modules.js";
 
 /**
@@ -119,6 +119,11 @@ beforeAll(async () => {
   await sql`update person_tags set removed_at = now(), removed_by = ${masterId}::uuid where tag_id = ${tagAbogado}::uuid and person_id in (select id from people where dni::bigint % 13 = 0)`.execute(db);
   await sql`analyze`.execute(db);
 }, 300000);
+
+// PGlite ejecuta WASM de forma síncrona: sin cesión explícita, los ~170 tests de este archivo (más de 60 s en total) corren como una
+// sola cadena de promesas y el event loop nunca atiende los mensajes IPC del runner de vitest → «Timeout calling "onTaskUpdate"»
+// y la corrida termina con código 1 aunque todo pase. Un turno de event loop entre tests lo evita sin cambiar ninguna aserción.
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 
 afterAll(async () => {
   await closeDb();
