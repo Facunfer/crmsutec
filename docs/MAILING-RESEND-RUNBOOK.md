@@ -91,13 +91,15 @@ Una clave `Sending access` no puede consultar dominios (Resend responde `restric
 
 - **Operativo (inmediato, sin tocar datos):** `MAIL_PROVIDER=ses` (o quitar la variable) y `pm2 restart sutecba sutecba-mail`. Las campañas lanzadas con Resend que sigan en curso quedan en espera hasta volver a Resend; no se pierden.
 - **Webhook:** pausar o borrar el endpoint en el panel de Resend.
-- **Migración 0045:** es aditiva y compatible hacia atrás; **no hace falta revertirla** para volver a SES. Si hiciera falta, solo es posible mientras no exista ninguna fila con `provider = 'resend'`:
+- **Migración 0045:** es aditiva y compatible hacia atrás; **no hace falta revertirla** para volver a SES. Si hiciera falta, solo es posible mientras no exista ninguna fila con `provider = 'resend'`. **Siempre dentro de una transacción**: sin ella, un `DROP` exitoso seguido de un `ADD` fallido dejaría la tabla sin restricción. Si hay filas `resend`, el `ADD` falla y el `ROLLBACK` deja todo como estaba.
 
 ```sql
+BEGIN;
 ALTER TABLE public.mailing_senders  DROP CONSTRAINT mailing_senders_provider_check;
 ALTER TABLE public.mailing_senders  ADD  CONSTRAINT mailing_senders_provider_check  CHECK (provider IN ('ses'));
 ALTER TABLE public.mailing_campaigns DROP CONSTRAINT mailing_campaigns_provider_check;
 ALTER TABLE public.mailing_campaigns ADD  CONSTRAINT mailing_campaigns_provider_check CHECK (provider IN ('ses'));
+COMMIT;
 ```
 
 ## 9. Migrar la URL pública a `https://crm.sutecba.com` (sin cortar nada)
