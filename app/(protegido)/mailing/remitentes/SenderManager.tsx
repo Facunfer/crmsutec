@@ -66,7 +66,7 @@ export function SenderManager({
   return (
     <div className="space-y-4">
       {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
-      {pending ? <p className="rounded-md bg-brand-50 px-3 py-2 text-sm text-brand-700">Consultando a Amazon SES…</p> : null}
+      {pending ? <p className="rounded-md bg-brand-50 px-3 py-2 text-sm text-brand-700">Consultando al proveedor de correo…</p> : null}
       {checked ? (
         <p
           role="status"
@@ -78,7 +78,7 @@ export function SenderManager({
           {checked.result.identity ? ` (identidad consultada: ${checked.result.identity}${checked.result.region ? ` · región ${checked.result.region}` : ""})` : ""}
         </p>
       ) : null}
-      {region ? <p className="text-xs text-brand-500">Región de Amazon SES configurada en el CRM: {region}.</p> : null}
+      {region ? <p className="text-xs text-brand-500">Región de Amazon SES configurada en el CRM: {region}. (Solo aplica si el proveedor activo es SES.)</p> : null}
       <div className="overflow-x-auto rounded-lg bg-white p-4 shadow-sm">
         <table className="min-w-full text-left text-sm">
           <thead>
@@ -86,7 +86,7 @@ export function SenderManager({
               <th className="py-2 pr-4 font-medium">Nombre</th>
               <th className="py-2 pr-4 font-medium">Remite como</th>
               <th className="py-2 pr-4 font-medium">Unidad</th>
-              <th className="py-2 pr-4 font-medium">Verificación SES</th>
+              <th className="py-2 pr-4 font-medium">Verificación</th>
               <th className="py-2 pr-4 font-medium">Estado</th>
               <th className="py-2 pr-4 font-medium" />
             </tr>
@@ -111,7 +111,7 @@ export function SenderManager({
                 <td className="py-1.5 pr-4">{s.active ? "Activo" : "Inactivo"}</td>
                 <td className="py-1.5 pr-4 text-right">
                   <button type="button" className="mr-3 text-brand-600 hover:underline disabled:opacity-50" disabled={pending} onClick={() => verify(s.id, s.name)}>
-                    verificar en SES
+                    verificar
                   </button>
                   <button
                     type="button"

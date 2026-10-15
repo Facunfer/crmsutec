@@ -71,6 +71,14 @@ const ACCOUNT_LEVEL_CODES = new Set([
   "CredentialsProviderError",
   "CredentialsError",
   "CredentialProviderError",
+  // Resend: afectan a TODA la cuenta/remitente, no a un destinatario (el worker pausa la campaña con el motivo).
+  "missing_api_key",
+  "invalid_api_key",
+  "restricted_api_key",
+  "suspended_api_key",
+  "domain_not_verified",
+  "daily_quota_exceeded",
+  "monthly_quota_exceeded",
 ]);
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -86,7 +94,7 @@ export async function claimRecipients(workerId: string, config: MailConfig, want
       with c as (
         select r.id
           from mailing_campaign_recipients r
-          join mailing_campaigns k on k.id = r.campaign_id and k.status = 'sending'
+          join mailing_campaigns k on k.id = r.campaign_id and k.status = 'sending' and k.provider = ${config.provider}
           join mailing_campaign_batches b on b.id = r.batch_id and b.scheduled_date <= ${today}::date and b.status in ('pending', 'running')
          where r.status = 'queued' and (r.next_attempt_at is null or r.next_attempt_at <= now())
          order by b.scheduled_date, r.campaign_id, r.id
@@ -185,7 +193,7 @@ async function recordOutcome(workerId: string, r: ClaimedRecipient, outcome: Sen
     await sql`
       update mailing_campaign_recipients
          set status = 'send_unknown', last_error = ${`${outcome.code}: ${outcome.message}`.slice(0, 500)},
-             status_detail = 'Respuesta incierta de SES: requiere revisión', lease_owner = null, lease_until = null, updated_at = now()
+             status_detail = 'Respuesta incierta del proveedor: requiere revisión', lease_owner = null, lease_until = null, updated_at = now()
        where id = ${r.id}::uuid and status = 'sending'`.execute(db);
     stats.unknown += 1;
     logEvent("envío incierto (no se reintenta)", { workerId, campaignId: r.campaignId, recipientId: r.id, attempt: r.attemptCount, errorCode: outcome.code });
@@ -254,6 +262,8 @@ async function processRecipient(
     await recordOutcome(workerId, r, { kind: "rejected", code: "BuildError", message: err instanceof Error ? err.message : "error", retryable: false }, today, stats);
     return;
   }
+  // Un mismo intento de un mismo destinatario nunca se duplica en el proveedor (Resend lo respeta ~24 h; SES lo ignora).
+  message.idempotencyKey = `sutecba-mail-${r.id}-${r.attemptCount}`;
   const outcome = await provider.send(message, { configurationSet: config.configurationSet });
   await recordOutcome(workerId, r, outcome, today, stats);
 }
@@ -302,7 +312,7 @@ export async function recoverExpiredLeases(): Promise<number> {
   const db = await getDb();
   const r = await sql<{ id: string; campaign_id: string }>`
     update mailing_campaign_recipients
-       set status = 'send_unknown', last_error = 'lease_expired', status_detail = 'Lease vencido: no se sabe si SES aceptó. Requiere revisión',
+       set status = 'send_unknown', last_error = 'lease_expired', status_detail = 'Lease vencido: no se sabe si el proveedor aceptó. Requiere revisión',
            lease_owner = null, lease_until = null, updated_at = now()
      where status = 'sending' and lease_until < now() returning id, campaign_id`.execute(db);
   for (const row of r.rows) logEvent("lease vencido → send_unknown", { campaignId: row.campaign_id, recipientId: row.id });

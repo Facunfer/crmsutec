@@ -83,7 +83,7 @@ export default async function CampanaPage({
       {detail.metricsVisible && k.send_unknown > 0 ? (
         <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Hay {nf.format(k.send_unknown)} envío(s) con resultado incierto: no se reintentan solos. <strong>Reencolar puede generar un envío duplicado si el
-          proveedor recibió el mensaje original.</strong> Verificá en Amazon SES antes de elegir «reencolar»; «marcar no enviado» lo da por no enviado.
+          proveedor recibió el mensaje original.</strong> Verificá en el panel del proveedor antes de elegir «reencolar»; «marcar no enviado» lo da por no enviado.
         </p>
       ) : null}
 
@@ -122,7 +122,7 @@ export default async function CampanaPage({
             <li>
               Cuota de hoy: {nf.format(detail.quota.reserved)} de {nf.format(detail.quota.limit)} usados · quedan {nf.format(detail.quota.remaining)}
             </li>
-            <li>Costo aproximado de SES: USD {detail.estimatedCostUsd.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</li>
+            <li>Costo aproximado (tarifa SES_COST_PER_1000): USD {detail.estimatedCostUsd.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</li>
             <li>Lanzada: {when(c.launchedAt)} · iniciada: {when(c.startedAt)} · finalizada: {when(c.finishedAt)}</li>
             {detail.configIssues.length > 0 ? <li className="text-amber-800">Configuración: {detail.configIssues.map((i) => i.key).join(", ")}</li> : null}
           </ul>

@@ -6,8 +6,9 @@ import { assertPermission } from "../auth/guard.js";
 import { isMasterGlobal, type SessionUser } from "../permissions/can.js";
 import { canAccessOrganization, isUuid, orgScope } from "../scope/organizations.js";
 import { headerSafe, normalizeEmail } from "./email.js";
+import { loadMailConfig, PROVIDER_LABEL } from "./config.js";
 import { getMailProvider } from "./providers/index.js";
-import type { IdentityCheck } from "./providers/types.js";
+import type { IdentityCheck, MailProviderName } from "./providers/types.js";
 
 assertServerOnly("lib/mailing/senders.ts");
 
@@ -22,7 +23,7 @@ export interface SenderRow {
   active: boolean;
   isDefault: boolean;
   ownerOrganizationId: string | null;
-  provider: "ses";
+  provider: MailProviderName;
   providerIdentity: string | null;
   verifiedStatus: "pending" | "verified" | "failed" | "unknown";
   verifiedAt: Date | null;
@@ -31,7 +32,7 @@ export interface SenderRow {
 
 interface DbSender {
   id: string; name: string; from_name: string; from_email: string; reply_to: string | null; active: boolean; is_default: boolean;
-  owner_organization_id: string | null; provider: "ses"; provider_identity: string | null;
+  owner_organization_id: string | null; provider: MailProviderName; provider_identity: string | null;
   verified_status: SenderRow["verifiedStatus"]; verified_at: Date | null; verified_checked_at: Date | null;
 }
 
@@ -115,8 +116,8 @@ export async function createSender(actor: SessionUser, input: SenderInput): Prom
     return await db.transaction().execute(async (trx) => {
       if (v.isDefault) await sql`update mailing_senders set is_default = false, updated_at = now() where is_default`.execute(trx);
       const r = await sql<{ id: string }>`
-        insert into mailing_senders (name, from_name, from_email, reply_to, active, is_default, owner_organization_id, provider_identity, created_by)
-        values (${v.name}, ${v.fromName}, ${v.fromEmail}, ${v.replyTo}, ${v.active}, ${v.isDefault}, ${v.ownerOrganizationId}::uuid, ${v.providerIdentity}, ${actor.id}::uuid)
+        insert into mailing_senders (name, from_name, from_email, reply_to, active, is_default, owner_organization_id, provider, provider_identity, created_by)
+        values (${v.name}, ${v.fromName}, ${v.fromEmail}, ${v.replyTo}, ${v.active}, ${v.isDefault}, ${v.ownerOrganizationId}::uuid, ${loadMailConfig().provider}, ${v.providerIdentity}, ${actor.id}::uuid)
         returning id`.execute(trx);
       return { id: r.rows[0]!.id };
     });
@@ -185,7 +186,7 @@ export async function verifySenderIdentity(actor: SessionUser, id: string): Prom
     await sql`update mailing_senders set verified_checked_at = now(), updated_at = now() where id = ${id}::uuid`.execute(db);
   } else {
     await sql`
-      update mailing_senders set verified_status = ${check.outcome}, verified_checked_at = now(),
+      update mailing_senders set provider = ${provider.name}, verified_status = ${check.outcome}, verified_checked_at = now(),
         verified_at = case when ${check.outcome} = 'verified' then coalesce(verified_at, now()) else null end, updated_at = now()
       where id = ${id}::uuid`.execute(db);
   }
@@ -203,8 +204,13 @@ export async function requireUsableSender(actor: SessionUser, senderId: string |
   const sender = await getSender(actor, senderId);
   if (!sender) throw new SenderError("El remitente no existe o no está disponible para vos.");
   if (!sender.active) throw new SenderError("El remitente está inactivo.");
+  const active = getMailProvider().name;
+  // La verificación es del PROVEEDOR con el que se comprobó: cambiar de proveedor exige volver a verificar (nunca se hereda).
+  if (sender.provider !== active) {
+    throw new SenderError(`El remitente fue verificado con ${PROVIDER_LABEL[sender.provider]}. Verificalo de nuevo con ${PROVIDER_LABEL[active]} antes de enviar.`);
+  }
   if (sender.verifiedStatus !== "verified") {
-    throw new SenderError(`El remitente no está verificado en Amazon SES (estado: ${sender.verifiedStatus}). Verificalo antes de enviar.`);
+    throw new SenderError(`El remitente no está verificado en ${PROVIDER_LABEL[active]} (estado: ${sender.verifiedStatus}). Verificalo antes de enviar.`);
   }
   return sender;
 }

@@ -93,7 +93,7 @@ export function AudiencePanel({
           </tbody>
         </table>
       ) : null}
-      {stats && cost !== null ? <p className="text-xs text-brand-500">Costo aproximado de SES: USD {cost.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</p> : null}
+      {stats && cost !== null ? <p className="text-xs text-brand-500">Costo aproximado (tarifa SES_COST_PER_1000): USD {cost.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</p> : null}
       <p className="text-xs text-brand-500">
         La audiencia se congela al crear la campaña: si después cambian los filtros, las etiquetas o los emails, esta campaña no se modifica. Un mailing no es
         contacto real.

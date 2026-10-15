@@ -7,7 +7,7 @@ import type { Database } from "../db/schema.js";
 import { can, isMasterGlobal, type SessionUser } from "../permissions/can.js";
 import { canAccessOrganization, getAccessibleOrganizationIds, isUuid, orgScope } from "../scope/organizations.js";
 import { analyzeAudience, audienceSpecSchema, AudienceError, persistSnapshot, type AudienceSpec, type AudienceStats } from "./audience.js";
-import { loadMailConfig, validateMailConfig } from "./config.js";
+import { loadMailConfig, PROVIDER_LABEL, validateMailConfig } from "./config.js";
 import { isValidEmail, normalizeEmail } from "./email.js";
 import { buildOutboundMessage } from "./message.js";
 import { getMailProvider } from "./providers/index.js";
@@ -136,7 +136,7 @@ export async function createCampaign(
     const created = await sql<{ id: string }>`
       insert into mailing_campaigns (name, owner_organization_id, created_by, audience_spec, audience_stats, total_selected, total_recipients, provider)
       values (${name.data}, ${owner}::uuid, ${actor.id}::uuid, ${JSON.stringify(analysis.specSummary)}::jsonb,
-              ${JSON.stringify(analysis.stats)}::jsonb, ${analysis.stats.selected}, ${analysis.stats.finalRecipients}, 'ses')
+              ${JSON.stringify(analysis.stats)}::jsonb, ${analysis.stats.selected}, ${analysis.stats.finalRecipients}, ${loadMailConfig().provider})
       returning id`.execute(trx);
     const id = created.rows[0]!.id;
     await persistSnapshot(trx, id, analysis.groups);
@@ -250,10 +250,11 @@ export async function launchCampaign(
 
   const provider = getMailProvider();
   const account = await provider.getAccountStatus();
-  if (account.error) throw new CampaignError(`No se pudo consultar Amazon SES (${account.error}). Revisá las credenciales y la región antes de lanzar.`);
-  if (account.sendingEnabled === false) throw new CampaignError("El envío está deshabilitado en la cuenta de Amazon SES.");
+  const label = PROVIDER_LABEL[provider.name];
+  if (account.error) throw new CampaignError(`No se pudo consultar ${label} (${account.error}). Revisá las credenciales y la configuración antes de lanzar.`);
+  if (account.sendingEnabled === false) throw new CampaignError(`El envío está deshabilitado en la cuenta de ${label}.`);
   if (account.sandbox === true && !options.acknowledgeSandbox) {
-    throw new CampaignError("Amazon SES está en modo Sandbox: solo se entrega a direcciones verificadas. Confirmá que lo sabés para lanzar igual.");
+    throw new CampaignError(`${label} está en modo Sandbox: solo se entrega a direcciones verificadas. Confirmá que lo sabés para lanzar igual.`);
   }
 
   const db = await getDb();
@@ -274,7 +275,7 @@ export async function launchCampaign(
     // Doble clic / dos operadores: solo uno pasa de `ready` a lanzada.
     const claimed = await sql<{ id: string }>`
       update mailing_campaigns
-         set status = ${future ? "scheduled" : "sending"}, launched_at = now(), launched_by = ${actor.id}::uuid,
+         set status = ${future ? "scheduled" : "sending"}, provider = ${provider.name}, launched_at = now(), launched_by = ${actor.id}::uuid,
              started_at = ${future ? null : sql`now()`}, scheduled_at = ${future}, daily_limit_snapshot = ${config.dailySendLimit},
              total_recipients = ${total}, updated_at = now()
        where id = ${id}::uuid and status = 'ready' returning id`.execute(trx);

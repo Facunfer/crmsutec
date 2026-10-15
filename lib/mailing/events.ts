@@ -7,7 +7,8 @@ import { suppressEmail } from "./suppressions.js";
 assertServerOnly("lib/mailing/events.ts");
 
 /**
- * Eventos de Amazon SES (Configuration Set → SNS → SQS). Dos pasos separados y puros:
+ * Eventos del proveedor. Amazon SES llega por Configuration Set → SNS → SQS; Resend, por webhook firmado (lib/mailing/resend-webhook.ts).
+ * `applyProviderEvent` es común a ambos. Dos pasos separados y puros:
  *   1. `parseSesNotification` — del cuerpo (sobre SNS o evento crudo) a eventos normalizados con CLAVE determinista.
  *   2. `applyProviderEvent`   — transacción: inserta el evento (UNIQUE provider_event_key) y, solo si es nuevo, mueve el estado.
  *
@@ -28,6 +29,13 @@ export interface ParsedProviderEvent {
   /** Solo para bounce: true si es permanente. */
   permanent?: boolean;
   isTest: boolean;
+  /** Origen que se guarda en la supresión (mailing_suppressions.source): «ses_event» o «resend_event». */
+  source: "ses_event" | "resend_event";
+  /**
+   * Proveedor que EMITIÓ el evento. Solo puede modificar destinatarios de campañas lanzadas con ese mismo proveedor: un evento de
+   * Resend jamás toca un envío de SES (ni al revés), aunque el id del mensaje coincidiera.
+   */
+  provider: "ses" | "resend";
 }
 
 function asDate(value: unknown, fallback: Date): Date {
@@ -71,6 +79,8 @@ export function parseSesNotification(body: string, now: Date = new Date()): Pars
     safe,
     permanent,
     isTest,
+    source: "ses_event",
+    provider: "ses",
   });
 
   switch (kindRaw.toLowerCase()) {
@@ -132,8 +142,11 @@ export async function applyProviderEvent(event: ParsedProviderEvent): Promise<Ap
   const db = await getDb();
   return db.transaction().execute(async (trx) => {
     const found = await sql<{ id: string; campaign_id: string; normalized_email: string; status: string }>`
-      select id, campaign_id, normalized_email, status from mailing_campaign_recipients
-      where provider_message_id = ${event.messageId} for update`.execute(trx);
+      select r.id, r.campaign_id, r.normalized_email, r.status
+        from mailing_campaign_recipients r
+        join mailing_campaigns c on c.id = r.campaign_id
+       where r.provider_message_id = ${event.messageId} and c.provider = ${event.provider}
+         for update of r`.execute(trx);
     const recipient = found.rows[0];
     if (!recipient) return "unmatched" as const;
 
@@ -158,7 +171,7 @@ export async function applyProviderEvent(event: ParsedProviderEvent): Promise<Ap
              set bounced_at = coalesce(bounced_at, ${event.at}),
                  status = case when status in ('complained') then status else 'bounced' end, updated_at = now()
            where id = ${id}::uuid`.execute(trx);
-        await suppressEmail(trx, { email: recipient.normalized_email, reason: "hard_bounce", source: "ses_event", campaignId: recipient.campaign_id, providerEventId: event.key });
+        await suppressEmail(trx, { email: recipient.normalized_email, reason: "hard_bounce", source: event.source, campaignId: recipient.campaign_id, providerEventId: event.key });
         break;
       case "soft_bounce":
         await sql`update mailing_campaign_recipients set soft_bounce_count = soft_bounce_count + 1, updated_at = now() where id = ${id}::uuid`.execute(trx);
@@ -168,7 +181,7 @@ export async function applyProviderEvent(event: ParsedProviderEvent): Promise<Ap
           update mailing_campaign_recipients
              set complained_at = coalesce(complained_at, ${event.at}), status = 'complained', updated_at = now()
            where id = ${id}::uuid`.execute(trx);
-        await suppressEmail(trx, { email: recipient.normalized_email, reason: "complaint", source: "ses_event", campaignId: recipient.campaign_id, providerEventId: event.key });
+        await suppressEmail(trx, { email: recipient.normalized_email, reason: "complaint", source: event.source, campaignId: recipient.campaign_id, providerEventId: event.key });
         break;
       case "reject":
       case "rendering_failure":

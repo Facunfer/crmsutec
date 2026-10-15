@@ -33,7 +33,8 @@ async function main() {
   if (blocking.length > 0) log("configuración incompleta: el worker espera (no envía) hasta que se corrija y se reinicie");
   setWorkerLogger((message, fields) => log(message, fields));
   const queue = createSqsEventQueue();
-  if (!queue) log("sin SES_EVENTS_QUEUE_URL: no se consumen eventos");
+  if (!queue && config.provider === "ses") log("sin SES_EVENTS_QUEUE_URL: no se consumen eventos");
+  if (config.provider === "resend") log("proveedor Resend: los eventos llegan por webhook (/api/mailing/webhooks/resend), no por cola");
 
   let stopping = false;
   const stop = (signal: string) => {

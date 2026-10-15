@@ -113,7 +113,7 @@ export async function getProviderAccountStatus(): Promise<AccountStatus> {
   if (accountCache && Date.now() - accountCache.at < 60_000) return accountCache.value;
   const config = loadMailConfig();
   let value: AccountStatus;
-  if (!config.region) {
+  if (config.provider === "ses" && !config.region) {
     value = { sandbox: null, sendingEnabled: null, max24HourSend: null, maxSendRate: null, sentLast24Hours: null, error: "Sin AWS_REGION" };
   } else {
     value = await getMailProvider().getAccountStatus();

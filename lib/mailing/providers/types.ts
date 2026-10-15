@@ -1,7 +1,10 @@
 /**
- * Contrato mínimo del proveedor de correo. Un solo proveedor en el MVP (Amazon SES); la interfaz existe para no acoplar la
- * aplicación al SDK ni a sus errores, no para soportar varios proveedores.
+ * Contrato mínimo del proveedor de correo. Proveedores soportados: Amazon SES y Resend (se elige con MAIL_PROVIDER). La interfaz existe
+ * para no acoplar la aplicación a ningún SDK ni a sus errores.
  */
+export const MAIL_PROVIDER_NAMES = ["ses", "resend"] as const;
+export type MailProviderName = (typeof MAIL_PROVIDER_NAMES)[number];
+
 export interface OutboundMessage {
   to: string;
   /** Ya formateado y a salvo de inyección de cabeceras (`"Nombre" <mail>`). */
@@ -14,6 +17,8 @@ export interface OutboundMessage {
   headers?: Record<string, string>;
   /** Etiquetas del proveedor para correlacionar eventos. */
   tags?: Record<string, string>;
+  /** Clave de idempotencia del envío (la usa Resend: el mismo intento no se duplica aunque se repita la llamada). SES la ignora. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -55,7 +60,7 @@ export interface IdentityCheck {
 }
 
 export interface MailProvider {
-  readonly name: "ses";
+  readonly name: MailProviderName;
   send(message: OutboundMessage, options?: { configurationSet?: string | null }): Promise<SendOutcome>;
   getAccountStatus(): Promise<AccountStatus>;
   getIdentityStatus(identity: string): Promise<IdentityStatus>;

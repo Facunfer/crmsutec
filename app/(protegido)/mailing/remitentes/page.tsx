@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/auth/guard";
 import { isMasterGlobal } from "@/lib/permissions/can";
 import { listOwnerOrganizationOptions } from "@/lib/organizations/ownership";
-import { loadMailConfig } from "@/lib/mailing/config";
+import { loadMailConfig, PROVIDER_LABEL } from "@/lib/mailing/config";
 import { listSenders } from "@/lib/mailing/senders";
 import { SesBanner } from "../SesBanner";
 import { SenderManager } from "./SenderManager";
@@ -23,13 +23,13 @@ export default async function RemitentesPage() {
       <SesBanner />
       <p className="text-sm text-brand-600">
         Cada campaña elige un remitente. Tener varios remitentes no multiplica la cuota: el tope diario de envíos es global. Un remitente solo puede usarse si su
-        identidad (email o dominio) está verificada en Amazon SES.
+        identidad (email o dominio) está verificada en {PROVIDER_LABEL[loadMailConfig().provider]}; si cambiás de proveedor, hay que volver a verificarlo.
       </p>
       <SenderManager
         senders={senders.map((s) => ({ ...s, verifiedAt: s.verifiedAt ? s.verifiedAt.toISOString() : null, verifiedCheckedAt: s.verifiedCheckedAt ? s.verifiedCheckedAt.toISOString() : null }))}
         organizations={orgs}
         canCreateGlobal={isMasterGlobal(actor)}
-        region={loadMailConfig().region}
+        region={loadMailConfig().provider === "ses" ? loadMailConfig().region : null}
       />
     </div>
   );

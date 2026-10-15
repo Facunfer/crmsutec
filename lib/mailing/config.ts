@@ -1,5 +1,6 @@
 import { assertServerOnly } from "../server-only.js";
 import { loadDotEnvFile } from "../db/env.js";
+import { MAIL_PROVIDER_NAMES, type MailProviderName } from "./providers/types.js";
 
 assertServerOnly("lib/mailing/config.ts");
 
@@ -8,11 +9,17 @@ assertServerOnly("lib/mailing/config.ts");
  * `describeMailConfig()` devuelve solo banderas y valores no sensibles.
  */
 export interface MailConfig {
-  provider: "ses";
+  /** Proveedor ACTIVO (MAIL_PROVIDER). Por defecto «ses»: la integración con Resend se activa solo con MAIL_PROVIDER=resend. */
+  provider: MailProviderName;
+  /** MAIL_PROVIDER traía un valor que no es un proveedor soportado (se usa «ses», pero la configuración queda bloqueada). */
+  providerInvalid: boolean;
   region: string | null;
   /** Credenciales explícitas (si faltan, el SDK usa su cadena por defecto: rol de instancia, perfil, etc.). */
   hasExplicitCredentials: boolean;
   configurationSet: string | null;
+  /** Resend: la clave NUNCA se imprime ni se guarda; solo se informa si está o no. */
+  hasResendApiKey: boolean;
+  hasResendWebhookSecret: boolean;
   /** Tope diario GLOBAL de envíos (rollout gradual: 500 → 1.000 → … → 15.000). */
   dailySendLimit: number;
   /** Mensajes por segundo al proveedor. */
@@ -49,13 +56,25 @@ function strEnv(name: string): string | null {
   return v && v.trim() !== "" ? v.trim() : null;
 }
 
+function resolveProvider(): { provider: MailProviderName; invalid: boolean } {
+  const raw = strEnv("MAIL_PROVIDER")?.toLowerCase();
+  if (raw === undefined) return { provider: "ses", invalid: false };
+  return (MAIL_PROVIDER_NAMES as readonly string[]).includes(raw) ? { provider: raw as MailProviderName, invalid: false } : { provider: "ses", invalid: true };
+}
+
+export const PROVIDER_LABEL: Record<MailProviderName, string> = { ses: "Amazon SES", resend: "Resend" };
+
 export function loadMailConfig(): MailConfig {
   loadDotEnvFile();
+  const { provider, invalid } = resolveProvider();
   return {
-    provider: "ses",
+    provider,
+    providerInvalid: invalid,
     region: strEnv("AWS_REGION") ?? strEnv("AWS_DEFAULT_REGION"),
     hasExplicitCredentials: Boolean(strEnv("AWS_ACCESS_KEY_ID") && strEnv("AWS_SECRET_ACCESS_KEY")),
     configurationSet: strEnv("SES_CONFIGURATION_SET"),
+    hasResendApiKey: Boolean(strEnv("RESEND_API_KEY")),
+    hasResendWebhookSecret: Boolean(strEnv("RESEND_WEBHOOK_SECRET")),
     dailySendLimit: intEnv("MAIL_DAILY_SEND_LIMIT", 500, 0, 1_000_000),
     maxSendRate: intEnv("MAIL_MAX_SEND_RATE", 5, 1, 1000),
     workerConcurrency: intEnv("MAIL_WORKER_CONCURRENCY", 5, 1, 100),
@@ -79,13 +98,26 @@ export interface MailConfigIssue {
 /** Validación de configuración para mostrar en la UI y para el arranque del worker. No revela valores. */
 export function validateMailConfig(config: MailConfig = loadMailConfig()): MailConfigIssue[] {
   const issues: MailConfigIssue[] = [];
-  if (!config.region) issues.push({ key: "AWS_REGION", message: "Falta AWS_REGION.", blocking: true });
+  if (config.providerInvalid) {
+    issues.push({ key: "MAIL_PROVIDER", message: `MAIL_PROVIDER debe ser ${MAIL_PROVIDER_NAMES.join(" o ")}.`, blocking: true });
+  }
+  if (config.provider === "ses" && !config.region) issues.push({ key: "AWS_REGION", message: "Falta AWS_REGION.", blocking: true });
+  if (config.provider === "resend") {
+    if (!config.hasResendApiKey) issues.push({ key: "RESEND_API_KEY", message: "Falta RESEND_API_KEY.", blocking: true });
+    if (!config.hasResendWebhookSecret) {
+      issues.push({ key: "RESEND_WEBHOOK_SECRET", message: "Sin RESEND_WEBHOOK_SECRET no se procesan entregas, rebotes ni quejas de Resend.", blocking: false });
+    }
+  }
   if (!config.unsubscribeSecret || config.unsubscribeSecret.length < 32) {
     issues.push({ key: "MAIL_UNSUBSCRIBE_SECRET", message: "MAIL_UNSUBSCRIBE_SECRET debe tener al menos 32 caracteres.", blocking: true });
   }
   if (!config.publicBaseUrl) issues.push({ key: "PUBLIC_BASE_URL", message: "Falta PUBLIC_BASE_URL (los enlaces de baja la necesitan).", blocking: true });
-  if (!config.configurationSet) issues.push({ key: "SES_CONFIGURATION_SET", message: "Sin SES_CONFIGURATION_SET no se reciben eventos (entregas, rebotes, quejas).", blocking: false });
-  if (!config.eventsQueueUrl) issues.push({ key: "SES_EVENTS_QUEUE_URL", message: "Sin SES_EVENTS_QUEUE_URL el worker no consume eventos de SES.", blocking: false });
+  if (config.provider === "ses" && !config.configurationSet) {
+    issues.push({ key: "SES_CONFIGURATION_SET", message: "Sin SES_CONFIGURATION_SET no se reciben eventos (entregas, rebotes, quejas).", blocking: false });
+  }
+  if (config.provider === "ses" && !config.eventsQueueUrl) {
+    issues.push({ key: "SES_EVENTS_QUEUE_URL", message: "Sin SES_EVENTS_QUEUE_URL el worker no consume eventos de SES.", blocking: false });
+  }
   if (config.dailySendLimit <= 0) issues.push({ key: "MAIL_DAILY_SEND_LIMIT", message: "MAIL_DAILY_SEND_LIMIT es 0: no se enviará nada.", blocking: true });
   return issues;
 }
@@ -96,6 +128,8 @@ export function describeMailConfig(config: MailConfig = loadMailConfig()) {
     region: config.region,
     explicitCredentials: config.hasExplicitCredentials,
     configurationSet: config.configurationSet,
+    resendApiKeySet: config.hasResendApiKey,
+    resendWebhookSecretSet: config.hasResendWebhookSecret,
     dailySendLimit: config.dailySendLimit,
     maxSendRate: config.maxSendRate,
     workerConcurrency: config.workerConcurrency,
