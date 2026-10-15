@@ -28,6 +28,8 @@ interface SutecbaDbGlobal {
     pglite: KyselyPGlite | null;
   }>;
   __sutecbaShutdownHookRegistered?: boolean;
+  /** El proceso declaró que gestiona su PROPIO apagado ordenado (ver `deferProcessShutdownToApp`). */
+  __sutecbaShutdownDeferred?: boolean;
 }
 
 const globalForDb = globalThis as unknown as SutecbaDbGlobal;
@@ -47,12 +49,29 @@ function registerShutdownHookOnce(): void {
   globalForDb.__sutecbaShutdownHookRegistered = true;
 
   const shutdown = () => {
+    // Un proceso con apagado ordenado propio (el worker de Mailing) NO debe ser cortado acá: cerrar la base y salir de
+    // inmediato interrumpe el ciclo de envío en vuelo (queda `sending` → `send_unknown`) y deja sin retirar su latido.
+    // La decisión es EXPLÍCITA (flag), no inferida de quién más escucha la señal: no depende del orden de registro ni de
+    // listeners ajenos. Sin el flag (app Next.js, scripts) el comportamiento es el de siempre.
+    if (globalForDb.__sutecbaShutdownDeferred) return;
     closeDb()
       .catch(() => {})
       .finally(() => process.exit(0));
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+/**
+ * El proceso se compromete a cerrar la base (`closeDb`) y a salir por su cuenta ante SIGINT/SIGTERM. Hay que llamarla ANTES del
+ * primer acceso a la base (el gancho se registra en ese momento). Solo la usa el worker de Mailing.
+ * Devuelve la función que REVOCA el compromiso: quien deja de gestionar su apagado no puede dejar la señal sin dueño.
+ */
+export function deferProcessShutdownToApp(): () => void {
+  globalForDb.__sutecbaShutdownDeferred = true;
+  return () => {
+    globalForDb.__sutecbaShutdownDeferred = false;
+  };
 }
 
 async function buildConnection(): Promise<{

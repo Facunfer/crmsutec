@@ -15,6 +15,7 @@ import { loadEnv } from "../lib/db/env.js";
 import { describeMailConfig, loadMailConfig, validateMailConfig } from "../lib/mailing/config.js";
 import { createSqsEventQueue } from "../lib/mailing/sqs.js";
 import { setWorkerLogger } from "../lib/mailing/worker.js";
+import { installWorkerShutdown } from "../lib/mailing/worker-shutdown.js";
 import { runWorkerLoop } from "../lib/mailing/worker-loop.js";
 
 function log(message: string, extra: Record<string, unknown> = {}): void {
@@ -23,11 +24,15 @@ function log(message: string, extra: Record<string, unknown> = {}): void {
 }
 
 async function main() {
+  const workerId = `${hostname()}:${process.pid}`;
+  // Primero de todo y ANTES de cualquier acceso a la base: el apagado ordenado es propio (ver lib/mailing/worker-shutdown.ts).
+  const shutdown = installWorkerShutdown((signal) =>
+    log("señal de apagado recibida: no se reclama más y se termina el ciclo en vuelo", { workerId, signal })
+  );
   loadEnv();
   const config = loadMailConfig();
   const issues = validateMailConfig(config);
   const blocking = issues.filter((i) => i.blocking).map((i) => i.key);
-  const workerId = `${hostname()}:${process.pid}`;
   const startedAt = new Date();
   log("arranque", { workerId, config: describeMailConfig(config), issues: issues.map((i) => `${i.key}${i.blocking ? "!" : ""}`) });
   if (blocking.length > 0) log("configuración incompleta: el worker espera (no envía) hasta que se corrija y se reinicie");
@@ -36,17 +41,11 @@ async function main() {
   if (!queue && config.provider === "ses") log("sin SES_EVENTS_QUEUE_URL: no se consumen eventos");
   if (config.provider === "resend") log("proveedor Resend: los eventos llegan por webhook (/api/mailing/webhooks/resend), no por cola");
 
-  let stopping = false;
-  const stop = (signal: string) => {
-    if (!stopping) log("señal de apagado recibida: no se reclama más y se termina el ciclo en vuelo", { workerId, signal });
-    stopping = true;
-  };
-  process.on("SIGTERM", () => stop("SIGTERM"));
-  process.on("SIGINT", () => stop("SIGINT"));
-
-  const { cycles } = await runWorkerLoop({ workerId, startedAt, config, blockingIssues: blocking, queue, isStopping: () => stopping });
+  const { cycles } = await runWorkerLoop({ workerId, startedAt, config, blockingIssues: blocking, queue, isStopping: shutdown.isStopping });
   log("detenido", { workerId, cycles });
   await closeDb();
+  // Todo quedó persistido y la base cerrada: salida explícita (un socket ocioso del SDK no debe demorarla).
+  process.exit(0);
 }
 
 main().catch(async (err) => {
