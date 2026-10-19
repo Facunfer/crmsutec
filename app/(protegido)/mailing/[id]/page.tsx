@@ -122,7 +122,6 @@ export default async function CampanaPage({
             <li>
               Cuota de hoy: {nf.format(detail.quota.reserved)} de {nf.format(detail.quota.limit)} usados · quedan {nf.format(detail.quota.remaining)}
             </li>
-            <li>Costo aproximado (tarifa SES_COST_PER_1000): USD {detail.estimatedCostUsd.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</li>
             <li>Lanzada: {when(c.launchedAt)} · iniciada: {when(c.startedAt)} · finalizada: {when(c.finishedAt)}</li>
             {detail.configIssues.length > 0 ? <li className="text-amber-800">Configuración: {detail.configIssues.map((i) => i.key).join(", ")}</li> : null}
           </ul>

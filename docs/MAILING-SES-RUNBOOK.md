@@ -37,7 +37,6 @@ CRM (Next.js)                    PostgreSQL                         Worker PM2 (
 | `MAIL_MAX_SEND_RATE` | no (5) | Mensajes por segundo (≤ el «maximum send rate» de SES). |
 | `MAIL_WORKER_CONCURRENCY` | no (5) | Envíos en paralelo del worker. |
 | `MAIL_LEASE_SECONDS` | no (120) | Duración del lease de un envío en curso. |
-| `SES_COST_PER_1000` | no (0.10) | USD por 1.000 emails, solo para la estimación en pantalla. |
 | `MAIL_REINFORCED_CONFIRMATION_THRESHOLD` | no (1000) | A partir de cuántos destinatarios se muestra la advertencia reforzada. |
 
 Generar el secreto: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`.

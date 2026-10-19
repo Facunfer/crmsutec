@@ -4,7 +4,7 @@ import { assertServerOnly } from "../server-only.js";
 import { assertPermission } from "../auth/guard.js";
 import { can, type SessionUser } from "../permissions/can.js";
 import { isUuid, orgScope } from "../scope/organizations.js";
-import { campaignVisible, estimateCostUsd, getCampaign, type CampaignRow } from "./campaigns.js";
+import { campaignVisible, getCampaign, type CampaignRow } from "./campaigns.js";
 import { loadMailConfig, validateMailConfig } from "./config.js";
 import { maskEmail } from "./email.js";
 import { getMailProvider } from "./providers/index.js";
@@ -133,7 +133,6 @@ export interface CampaignDetail {
   batches: Array<{ sequence: number; scheduledDate: string; status: string; recipientCount: number; sentCount: number }>;
   quota: { day: string; limit: number; reserved: number; remaining: number };
   worker: { active: boolean; lastSeenAt: Date | null };
-  estimatedCostUsd: number;
   configIssues: Array<{ key: string; message: string; blocking: boolean }>;
   /** Solo se llena con mailing.view_metrics; sin eso, los conteos van en 0. */
   metricsVisible: boolean;
@@ -179,7 +178,6 @@ export async function getCampaignDetail(actor: SessionUser, id: string): Promise
     batches: batches.rows.map((b) => ({ sequence: b.sequence, scheduledDate: b.scheduled_date, status: b.status, recipientCount: b.recipient_count, sentCount: b.sent_count })),
     quota,
     worker: { active: lastSeen !== null && Date.now() - new Date(lastSeen).getTime() < 60_000, lastSeenAt: lastSeen },
-    estimatedCostUsd: estimateCostUsd(campaign.totalRecipients, config.costPer1000Usd),
     configIssues: validateMailConfig(config),
     metricsVisible,
   };

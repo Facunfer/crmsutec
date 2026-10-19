@@ -241,7 +241,7 @@ export interface RenderedMessage {
 }
 
 const FOOTER_HTML = (url: string) =>
-  `<hr style="border:none;border-top:1px solid #dddddd;margin:24px 0 12px"><p style="font-size:12px;color:#666666;line-height:1.4">Recibís este mensaje porque tu email figura en la base de contactos del sindicato. Si no querés recibir más comunicaciones, podés <a href="${escapeHtml(url)}">darte de baja acá</a>.</p>`;
+  `<hr style="border:none;border-top:1px solid #dddddd;margin:24px 0 12px"><p style="font-size:12px;color:#666666;line-height:1.4">Si no querés recibir más comunicaciones, podés <a href="${escapeHtml(url)}">darte de baja acá</a>.</p>`;
 const FOOTER_TEXT = (url: string) => `\n\n--\nSi no querés recibir más comunicaciones, podés darte de baja acá: ${url}`;
 
 export function renderMessage(input: RenderInput): RenderedMessage {

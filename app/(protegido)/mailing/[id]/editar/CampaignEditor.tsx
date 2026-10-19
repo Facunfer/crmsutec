@@ -22,7 +22,6 @@ interface Props {
     totalRecipients: number;
   };
   senders: Array<{ id: string; name: string; fromName: string; fromEmail: string; verifiedStatus: string; isDefault: boolean }>;
-  estimatedCostUsd: number;
   sandbox: boolean;
   dailyLimit: number;
   quotaRemaining: number;
@@ -34,7 +33,7 @@ interface Props {
 
 const VERIFIED_LABEL: Record<string, string> = { verified: "verificado", pending: "pendiente de verificar", failed: "falló la verificación", unknown: "sin verificar" };
 
-export function CampaignEditor({ campaign, senders, estimatedCostUsd, sandbox, dailyLimit, quotaRemaining, estimatedDays, canSend, reinforcedThreshold, configIssues }: Props) {
+export function CampaignEditor({ campaign, senders, sandbox, dailyLimit, quotaRemaining, estimatedDays, canSend, reinforcedThreshold, configIssues }: Props) {
   const router = useRouter();
   const [name, setName] = useState(campaign.name);
   const [subject, setSubject] = useState(campaign.subject);
@@ -221,7 +220,7 @@ export function CampaignEditor({ campaign, senders, estimatedCostUsd, sandbox, d
         <h2 className={h2}>6. Confirmar y lanzar</h2>
         <ul className="space-y-1 text-sm text-brand-700">
           <li>
-            Destinatarios finales: <strong>{nf.format(campaign.totalRecipients)}</strong> · costo aproximado de SES: USD {estimatedCostUsd.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
+            Destinatarios finales: <strong>{nf.format(campaign.totalRecipients)}</strong>
           </li>
           <li>
             Remitente: {sender ? `${sender.fromName} <${sender.fromEmail}>` : "—"} · asunto: {subject || "—"}

@@ -28,7 +28,6 @@ export interface MailConfig {
   unsubscribeSecret: string | null;
   publicBaseUrl: string | null;
   eventsQueueUrl: string | null;
-  costPer1000Usd: number;
   /** Segundos de lease de un destinatario en envío. */
   leaseSeconds: number;
   /** Destinatarios a partir de los cuales se exige confirmación reforzada. */
@@ -42,13 +41,6 @@ function intEnv(name: string, fallback: number, min: number, max: number): numbe
   const n = Number(raw);
   if (!Number.isInteger(n) || n < min || n > max) return fallback;
   return n;
-}
-
-function floatEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 function strEnv(name: string): string | null {
@@ -81,7 +73,6 @@ export function loadMailConfig(): MailConfig {
     unsubscribeSecret: strEnv("MAIL_UNSUBSCRIBE_SECRET"),
     publicBaseUrl: (strEnv("PUBLIC_BASE_URL") ?? strEnv("SUTECBA_PUBLIC_BASE_URL"))?.replace(/\/+$/, "") ?? null,
     eventsQueueUrl: strEnv("SES_EVENTS_QUEUE_URL"),
-    costPer1000Usd: floatEnv("SES_COST_PER_1000", 0.1),
     leaseSeconds: intEnv("MAIL_LEASE_SECONDS", 120, 10, 3600),
     reinforcedConfirmationThreshold: intEnv("MAIL_REINFORCED_CONFIRMATION_THRESHOLD", 1000, 1, 1_000_000),
     timezone: "America/Argentina/Buenos_Aires",
@@ -136,6 +127,5 @@ export function describeMailConfig(config: MailConfig = loadMailConfig()) {
     unsubscribeSecretSet: Boolean(config.unsubscribeSecret),
     publicBaseUrl: config.publicBaseUrl,
     eventsQueueSet: Boolean(config.eventsQueueUrl),
-    costPer1000Usd: config.costPer1000Usd,
   };
 }

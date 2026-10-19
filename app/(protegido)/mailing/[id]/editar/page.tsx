@@ -49,7 +49,6 @@ export default async function EditarCampanaPage({ params }: { params: Promise<{ 
           totalRecipients: c.totalRecipients,
         }}
         senders={senders.map((s) => ({ id: s.id, name: s.name, fromName: s.fromName, fromEmail: s.fromEmail, verifiedStatus: s.verifiedStatus, isDefault: s.isDefault }))}
-        estimatedCostUsd={detail.estimatedCostUsd}
         sandbox={account.sandbox === true}
         dailyLimit={config.dailySendLimit}
         quotaRemaining={detail.quota.remaining}

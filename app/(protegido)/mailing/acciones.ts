@@ -55,11 +55,11 @@ function toSpec(selection: MailingSelection): AudienceSpec {
 
 export async function previewAudienceAction(
   selection: MailingSelection
-): Promise<{ ok: boolean; error?: string; stats?: AudienceStats; estimatedCostUsd?: number; threshold?: number }> {
+): Promise<{ ok: boolean; error?: string; stats?: AudienceStats; threshold?: number }> {
   const actor = await requireUser();
   try {
     const result = await previewAudience(actor, toSpec(selection));
-    return { ok: true, stats: result.stats, estimatedCostUsd: result.estimatedCostUsd, threshold: loadMailConfig().reinforcedConfirmationThreshold };
+    return { ok: true, stats: result.stats, threshold: loadMailConfig().reinforcedConfirmationThreshold };
   } catch (err) {
     return { ok: false, error: message(err, "No se pudo calcular la audiencia.") };
   }

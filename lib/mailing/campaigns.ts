@@ -92,12 +92,7 @@ const nameSchema = z.string().trim().min(1, "Poné un nombre a la campaña.").ma
 export async function previewAudience(actor: SessionUser, spec: AudienceSpec) {
   assertPermission(actor, "mailing.create");
   const analysis = await analyzeAudience(actor, spec);
-  const config = loadMailConfig();
-  return { stats: analysis.stats, estimatedCostUsd: estimateCostUsd(analysis.stats.finalRecipients, config.costPer1000Usd) };
-}
-
-export function estimateCostUsd(recipients: number, costPer1000: number): number {
-  return Math.round((recipients / 1000) * costPer1000 * 100) / 100;
+  return { stats: analysis.stats };
 }
 
 export async function createCampaign(

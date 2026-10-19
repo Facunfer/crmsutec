@@ -745,6 +745,17 @@ describe("seguridad", () => {
     expect(neutral.html).toContain("<p>Hola,</p>");
   });
 
+  it("pie del correo: sin la frase de «base de contactos», pero SIEMPRE con el enlace de baja (HTML y texto)", () => {
+    const url = "https://crm.test/unsubscribe/abc123";
+    const r = template.renderMessage({ subject: "S", preheader: null, htmlBody: "<p>Hola</p>", textBody: "", vars: {}, unsubscribeUrl: url });
+    expect(r.html).not.toContain("Recibís este mensaje");
+    expect(r.html).not.toContain("base de contactos");
+    expect(r.html).toContain(`href="${url}"`);
+    expect(r.html).toContain("darte de baja");
+    expect(r.text).not.toContain("base de contactos");
+    expect(r.text).toContain(url);
+  });
+
   it("cabeceras: el asunto y el remitente no admiten saltos de línea; email inválido o con espacios no pasa", () => {
     expect(emailLib.headerSafe("a\r\nBcc: x")).not.toMatch(/[\r\n]/);
     expect(emailLib.formatAddress('Ana "X"\r\nBcc: y', "a@b.test")).toBe('"Ana \\"X\\" Bcc: y" <a@b.test>');
@@ -893,8 +904,4 @@ describe("prueba y reparto en lotes", () => {
     expect(campaigns.planBatches(10, 50, 0, "2026-10-12", true)).toEqual([{ sequence: 1, date: "2026-10-13", count: 10 }]);
   });
 
-  it("estimación de costo", () => {
-    expect(campaigns.estimateCostUsd(7000, 0.1)).toBe(0.7);
-    expect(campaigns.estimateCostUsd(15000, 0.1)).toBe(1.5);
-  });
 });

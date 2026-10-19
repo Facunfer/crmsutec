@@ -22,7 +22,6 @@ export function AudiencePanel({
 }) {
   const router = useRouter();
   const [stats, setStats] = useState<AudienceStats | null>(null);
-  const [cost, setCost] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(defaultName);
   const [loading, startPreview] = useTransition();
@@ -36,7 +35,6 @@ export function AudiencePanel({
       const r = await previewAudienceAction(selection);
       if (r.ok && r.stats) {
         setStats(r.stats);
-        setCost(r.estimatedCostUsd ?? null);
       } else setError(r.error ?? "No se pudo calcular la audiencia.");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,7 +91,6 @@ export function AudiencePanel({
           </tbody>
         </table>
       ) : null}
-      {stats && cost !== null ? <p className="text-xs text-brand-500">Costo aproximado (tarifa SES_COST_PER_1000): USD {cost.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</p> : null}
       <p className="text-xs text-brand-500">
         La audiencia se congela al crear la campaña: si después cambian los filtros, las etiquetas o los emails, esta campaña no se modifica. Un mailing no es
         contacto real.
