@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
 import { assertServerOnly } from "../server-only.js";
-import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
+import { consumePublicLinkAttempt, settlePublicLinkAttempt } from "../security/public-rate-limit.js";
 
 assertServerOnly("lib/mailing/unsubscribe-limit.ts");
 
@@ -14,15 +13,10 @@ assertServerOnly("lib/mailing/unsubscribe-limit.ts");
  */
 const SCOPE = "unsubscribe";
 
-export function normalizeClientIp(raw: string | null | undefined): string {
-  const first = raw?.split(",")[0]?.trim() ?? "";
-  return isIP(first) ? first : "127.0.0.1";
-}
-
-export async function allowUnsubscribeAttempt(token: string, rawIp: string | null | undefined): Promise<boolean> {
-  const ip = normalizeClientIp(rawIp);
+/** `ip` ya viene resuelta por `resolveClientIp` (solo entradas de nuestros proxies, S4): este módulo no lee encabezados. */
+export async function allowUnsubscribeAttempt(token: string, ip: string): Promise<boolean> {
   const identifier = createHash("sha256").update(token).digest("hex").slice(0, 32);
-  const { allowed } = await checkPublicLinkRateLimit(SCOPE, identifier, ip, { perIdentifierLimit: 30, perIpLimit: 600, windowMinutes: 10 });
-  if (allowed) await recordPublicLinkAttempt(SCOPE, identifier, ip, true);
-  return allowed;
+  const attempt = await consumePublicLinkAttempt(SCOPE, identifier, ip, { perIdentifierLimit: 30, perIpLimit: 600, windowMinutes: 10 });
+  await settlePublicLinkAttempt(attempt.attemptId, true);
+  return attempt.allowed;
 }

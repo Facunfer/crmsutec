@@ -50,6 +50,9 @@ export const PERMISSIONS = [
   { key: "meetings.change_status", moduleKey: "reuniones", description: "Cambiar el estado de una reunión (iniciar/finalizar/cancelar)" },
   { key: "meetings.manage_invitations", moduleKey: "reuniones", description: "Generar y gestionar invitaciones" },
   { key: "meetings.attendance_manual", moduleKey: "reuniones", description: "Registrar/corregir asistencia manualmente" },
+  // Operar la acreditación: emitir el QR operativo, ver el panel en vivo y buscar personas para el check-in. Separado de `meetings.view`
+  // (que tiene hasta LECTURA): ver una reunión no habilita emitir QR válidos ni consultar personas para acreditar.
+  { key: "meetings.accredit", moduleKey: "reuniones", description: "Acreditar asistentes: ver el QR operativo y buscar personas para el check-in" },
   { key: "forms.view", moduleKey: "formularios", description: "Ver formularios y sus respuestas" },
   { key: "forms.create", moduleKey: "formularios", description: "Crear formularios" },
   { key: "forms.edit", moduleKey: "formularios", description: "Editar formularios" },
@@ -141,6 +144,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "meetings.change_status",
     "meetings.manage_invitations",
     "meetings.attendance_manual",
+    "meetings.accredit",
     "forms.view",
     "forms.create",
     "forms.edit",
@@ -164,6 +168,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "meetings.change_status",
     "meetings.manage_invitations",
     "meetings.attendance_manual",
+    "meetings.accredit",
   ],
   LECTURA: [
     "dashboard.view",

@@ -1,6 +1,6 @@
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
+import { consumePublicLinkAttempt, hashRateLimitIdentifier, settlePublicLinkAttempt } from "../security/public-rate-limit.js";
 import { isPubliclyRespondable } from "./state-machine.js";
 import { hashInvitationToken } from "./tokens.js";
 import { checkInWithInvitationToken } from "../attendance/checkin.js";
@@ -39,8 +39,9 @@ const RATE_LIMIT_SCOPE = "invitation_view";
  * resultado "invalid" que uno con formato roto.
  */
 export async function getInvitationByToken(token: string, ip: string): Promise<InvitationPublicView> {
-  const rate = await checkPublicLinkRateLimit(RATE_LIMIT_SCOPE, token, ip, { perIdentifierLimit: 30 });
-  if (!rate.allowed) return { kind: "rate_limited" };
+  // El token NUNCA se guarda como identificador del límite (S1): se usa su hash.
+  const attempt = await consumePublicLinkAttempt(RATE_LIMIT_SCOPE, hashRateLimitIdentifier(RATE_LIMIT_SCOPE, token), ip, { perIdentifierLimit: 30 });
+  if (!attempt.allowed) return { kind: "rate_limited" };
 
   const db = await getDb();
   const tokenHash = hashInvitationToken(token);
@@ -65,7 +66,7 @@ export async function getInvitationByToken(token: string, ip: string): Promise<I
     .where("meeting_invitations.token_hash", "=", tokenHash)
     .executeTakeFirst();
 
-  await recordPublicLinkAttempt(RATE_LIMIT_SCOPE, token, ip, !!row);
+  await settlePublicLinkAttempt(attempt.attemptId, !!row);
 
   if (!row || row.withdrawn_at) return { kind: "invalid" };
   if (row.meeting_status === "cancelled") return { kind: "cancelled" };
@@ -119,8 +120,8 @@ export async function respondToInvitation(
   response: "confirmed" | "declined",
   ip: string
 ): Promise<RespondResult> {
-  const rate = await checkPublicLinkRateLimit("invitation_respond", token, ip, { perIdentifierLimit: 15 });
-  if (!rate.allowed) return { ok: false, reason: "rate_limited" };
+  const attempt = await consumePublicLinkAttempt("invitation_respond", hashRateLimitIdentifier("invitation_respond", token), ip, { perIdentifierLimit: 15 });
+  if (!attempt.allowed) return { ok: false, reason: "rate_limited" };
 
   const db = await getDb();
   const tokenHash = hashInvitationToken(token);
@@ -176,7 +177,7 @@ export async function respondToInvitation(
     return { ok: true };
   });
 
-  await recordPublicLinkAttempt("invitation_respond", token, ip, result.ok);
+  await settlePublicLinkAttempt(attempt.attemptId, result.ok);
   return result;
 }
 
@@ -190,8 +191,8 @@ export type CheckinByTokenResult =
  * falta un botón de confirmación, sin pedirle de nuevo DNI/apellido.
  */
 export async function checkInByInvitationToken(token: string, ip: string, userAgent: string | undefined): Promise<CheckinByTokenResult> {
-  const rate = await checkPublicLinkRateLimit("invitation_checkin", token, ip, { perIdentifierLimit: 20 });
-  if (!rate.allowed) return { ok: false, reason: "rate_limited" };
+  const attempt = await consumePublicLinkAttempt("invitation_checkin", hashRateLimitIdentifier("invitation_checkin", token), ip, { perIdentifierLimit: 20 });
+  if (!attempt.allowed) return { ok: false, reason: "rate_limited" };
 
   const db = await getDb();
   const tokenHash = hashInvitationToken(token);
@@ -202,13 +203,10 @@ export async function checkInByInvitationToken(token: string, ip: string, userAg
     .where("token_hash", "=", tokenHash)
     .executeTakeFirst();
 
-  if (!row || row.withdrawn_at) {
-    await recordPublicLinkAttempt("invitation_checkin", token, ip, false);
-    return { ok: false, reason: "invalid" };
-  }
+  if (!row || row.withdrawn_at) return { ok: false, reason: "invalid" };
 
   const result = await checkInWithInvitationToken(row.meeting_id, row.person_id, ip, userAgent);
-  await recordPublicLinkAttempt("invitation_checkin", token, ip, result.kind === "ok" || result.kind === "already_checked_in");
+  await settlePublicLinkAttempt(attempt.attemptId, result.kind === "ok" || result.kind === "already_checked_in");
 
   if (result.kind === "ok" || result.kind === "already_checked_in") {
     return { ok: true, checkedInAt: result.checkedInAt };

@@ -5,6 +5,7 @@ import { assertServerOnly } from "../server-only.js";
 import { toJsonb } from "../db/json.js";
 import { normalizeDni } from "../people/normalize.js";
 import type { FormVersionSchema } from "./version-schema.js";
+import { isAssociationAllowedForForm } from "./queries.js";
 
 assertServerOnly("lib/forms/apply.ts");
 
@@ -178,24 +179,40 @@ export async function mergeEmptyFieldsOnly(personId: string, coreValues: Record<
   return applyFieldsToPerson(personId, coreValues, customValues, { mode: "fill_empty" });
 }
 
-export async function applyActions(schema: FormVersionSchema, personId: string, normalizedValues: Record<string, unknown>): Promise<void> {
+/**
+ * Ejecuta las acciones del formulario. `formOwnerOrganizationId` es la unidad propietaria del FORMULARIO (la fija el servidor): fuera
+ * de ella y sus dependientes no se suma a nadie a ninguna asociación, venga el id de la configuración del formulario o de un campo
+ * «asociación» que completó el visitante (S2). Un id fuera de alcance, inexistente o mal formado se ignora sin error: el envío se
+ * procesa igual y no se le revela al visitante qué asociaciones existen.
+ */
+export async function applyActions(
+  schema: FormVersionSchema,
+  personId: string,
+  normalizedValues: Record<string, unknown>,
+  formOwnerOrganizationId: string
+): Promise<void> {
   for (const action of schema.actions) {
     if (action.actionType !== "add_to_association" || !action.config.associationId) continue;
-    await addToAssociationIfMissing(action.config.associationId, personId);
+    await addToAssociationIfMissing(action.config.associationId, personId, formOwnerOrganizationId);
   }
 
   for (const field of schema.fields.filter((f) => f.visible && f.fieldType === "association")) {
     const associationId = normalizedValues[field.key];
     if (typeof associationId === "string" && associationId) {
-      await addToAssociationIfMissing(associationId, personId);
+      await addToAssociationIfMissing(associationId, personId, formOwnerOrganizationId);
     }
   }
 }
 
-export async function addToAssociationIfMissing(associationId: string, personId: string): Promise<void> {
+export type AddToAssociationOutcome = "added" | "already_member" | "rejected";
+
+export async function addToAssociationIfMissing(
+  associationId: string,
+  personId: string,
+  formOwnerOrganizationId: string
+): Promise<AddToAssociationOutcome> {
+  if (!(await isAssociationAllowedForForm(associationId, formOwnerOrganizationId))) return "rejected";
   const db = await getDb();
-  const association = await db.selectFrom("associations").select("id").where("id", "=", associationId).where("status", "=", "active").executeTakeFirst();
-  if (!association) return;
 
   const existing = await db
     .selectFrom("people_associations")
@@ -204,9 +221,10 @@ export async function addToAssociationIfMissing(associationId: string, personId:
     .where("person_id", "=", personId)
     .where("status", "=", "active")
     .executeTakeFirst();
-  if (existing) return;
+  if (existing) return "already_member";
 
   await db.insertInto("people_associations").values({ association_id: associationId, person_id: personId, added_by: null }).execute();
+  return "added";
 }
 
 export function splitCoreAndCustomValues(

@@ -9,7 +9,8 @@ import { signRotatingQrToken, signStaticQrToken } from "@/lib/attendance/qr";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return new Response("No autorizado.", { status: 401 });
-  if (!can(user, "meetings.view")) return new Response("No tenés permiso.", { status: 403 });
+  // `meetings.accredit` (S6): ver una reunión (`meetings.view`, incluido LECTURA) no alcanza para emitir un QR de check-in válido.
+  if (!can(user, "meetings.accredit")) return new Response("No tenés permiso.", { status: 403 });
 
   const { id } = await params;
   // Sin esto, cualquiera con meetings.view emitiría QR válidos de reuniones ajenas.

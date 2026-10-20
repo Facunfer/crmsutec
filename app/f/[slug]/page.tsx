@@ -35,6 +35,7 @@ export default async function PublicFormPage({ params }: { params: Promise<{ slu
       <FormRenderer
         slug={slug}
         idempotencyKey={randomUUID()}
+        renderedAtMs={Date.now()}
         name={result.schema.name}
         consentText={result.schema.consentText}
         fields={result.schema.fields}

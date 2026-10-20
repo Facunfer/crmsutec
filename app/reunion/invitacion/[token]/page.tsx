@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { getInvitationByToken } from "@/lib/meetings/public";
 import { ResponseButtons } from "./ResponseButtons";
 import { CheckinButton } from "./CheckinButton";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 export const metadata = { robots: "noindex, nofollow" };
 
@@ -23,7 +24,7 @@ const MESSAGES: Record<string, string> = {
 export default async function InvitacionPublicaPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
 
   const view = await getInvitationByToken(token, ip);
 

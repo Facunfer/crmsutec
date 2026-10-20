@@ -4,10 +4,11 @@ import { cookies, headers } from "next/headers";
 import { confirmCheckin, identifyForCheckin } from "@/lib/attendance/checkin";
 import { verifyCheckinSession } from "@/lib/attendance/session-tokens";
 import { CHECKIN_SESSION_COOKIE } from "@/lib/attendance/constants";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 async function getIp(): Promise<string> {
   const hdrs = await headers();
-  return hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  return resolveClientIp(hdrs);
 }
 
 async function getSessionMeetingId(): Promise<string | null> {

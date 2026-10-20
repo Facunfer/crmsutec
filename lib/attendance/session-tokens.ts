@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { assertServerOnly } from "../server-only.js";
+import { getQrRootSecret } from "./qr-config.js";
 
 assertServerOnly("lib/attendance/session-tokens.ts");
 
@@ -15,9 +16,7 @@ assertServerOnly("lib/attendance/session-tokens.ts");
  */
 
 function getRootSecret(): string {
-  const secret = process.env.SUTECBA_QR_SECRET;
-  if (!secret) throw new Error("Falta SUTECBA_QR_SECRET en el entorno.");
-  return secret;
+  return getQrRootSecret();
 }
 
 function sign(payload: Record<string, unknown>): string {

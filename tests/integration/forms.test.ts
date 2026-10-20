@@ -444,11 +444,13 @@ describe("rate limiting en el envío público", () => {
     const ip = nextIp();
 
     let lastKind = "";
-    for (let i = 0; i < 61; i += 1) {
+    // Desde F0 el tope por formulario es holgado (600 cada 10 min: un acto puede recibir cientos de envíos); el freno de una sola
+    // IP son 300. Cada envío es de una persona distinta (el mismo DNI se frena antes, a los 5).
+    for (let i = 0; i < 301; i += 1) {
       const result = await submitForm("form-rate-limit", baseEntries({ dni: `3099${String(i).padStart(4, "0")}` }), randomUUID(), ip, "agent");
       lastKind = result.kind;
       if (lastKind === "rate_limited") break;
     }
     expect(lastKind).toBe("rate_limited");
-  }, 30_000);
+  }, 60_000);
 });

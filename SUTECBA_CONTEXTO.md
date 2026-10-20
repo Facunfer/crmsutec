@@ -113,7 +113,9 @@ Validadas en `lib/db/env.ts` (Zod). Se lee `.env` con `process.loadEnvFile()` (a
 | `SUTECBA_DATABASE_URL` | Postgres real (opcional; si falta se usa PGlite). |
 | `SUTECBA_PGLITE_DATA_DIR` | Directorio de datos PGlite (default `.data/pglite-local`). |
 | `SUTECBA_TZ` | Zona horaria. |
-| `SUTECBA_QR_SECRET` | Secreto de los QR (≥32 chars). |
+| `SUTECBA_QR_SECRET` | Secreto de los QR (≥32 chars). **Obligatorio en producción** (sin él el sitio responde 500 en todas las rutas, con el error en el log; `instrumentation.ts`), salvo `SUTECBA_QR_DISABLED=true`. |
+| `SUTECBA_QR_DISABLED` | `true` = la instalación no usa QR: el secreto deja de ser obligatorio y no se firma nada. |
+| `SUTECBA_TRUSTED_PROXY_HOPS` | Proxies propios delante de la app (default `1` = nginx; `0` = sin proxy). La IP del cliente es la entrada `hops` contando desde la derecha de `X-Forwarded-For` (`lib/security/client-ip.ts`). |
 | `SUTECBA_PUBLIC_BASE_URL` | URL pública base (opcional). |
 | `SUTECBA_SESSION_SECRET`, `SUTECBA_TOKEN_SECRET` | Declaradas pero **no usadas hoy**. |
 

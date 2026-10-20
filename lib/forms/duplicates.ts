@@ -62,14 +62,14 @@ async function discardSiblingCandidates(db: Awaited<ReturnType<typeof getDb>>, s
  */
 export async function linkDuplicateCandidate(actor: SessionUser, candidateId: string): Promise<void> {
   assertPermission(actor, "forms.review_duplicates");
-  const { db, candidate, submission, schema, normalizedValues, coreValues, customValues } = await loadCandidateContext(actor, candidateId);
+  const { db, candidate, submission, schema, normalizedValues, coreValues, customValues, ownerOrganizationId } = await loadCandidateContext(actor, candidateId);
   if (!candidate.person_id) throw new DuplicateResolutionError("Este candidato no tiene una persona propuesta para vincular.");
   // No se escribe sobre una persona de otra unidad.
   if (!(await canAccessPerson(actor, candidate.person_id))) {
     throw new DuplicateResolutionError("La persona propuesta pertenece a otra unidad; no se puede vincular desde acá.");
   }
 
-  await applyActions(schema, candidate.person_id, normalizedValues);
+  await applyActions(schema, candidate.person_id, normalizedValues, ownerOrganizationId);
 
   await db
     .updateTable("person_duplicate_candidates")
@@ -98,7 +98,7 @@ export async function createNewFromCandidate(actor: SessionUser, candidateId: st
     }
     throw err;
   }
-  await applyActions(schema, personId, normalizedValues);
+  await applyActions(schema, personId, normalizedValues, ownerOrganizationId);
 
   await db
     .updateTable("person_duplicate_candidates")

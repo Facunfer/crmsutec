@@ -11,7 +11,7 @@ import { LiveClock } from "./LiveClock";
 import { LivePanel } from "./LivePanel";
 
 export default async function AsistenciaPage({ params }: { params: Promise<{ id: string }> }) {
-  const actor = await requirePermission("meetings.view");
+  const actor = await requirePermission("meetings.accredit");
   const { id } = await params;
 
   const meeting = await getMeetingById(actor, id);

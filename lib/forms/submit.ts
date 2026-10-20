@@ -3,10 +3,11 @@ import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { toJsonb } from "../db/json.js";
-import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
+import { hasUnsafeText, isUnsafeText, UNSAFE_TEXT_MESSAGE } from "../security/text-safety.js";
+import { consumePublicLinkAttempt, hashRateLimitIdentifier, settlePublicLinkAttempt } from "../security/public-rate-limit.js";
 import { FIELD_TYPES, isCorePersonMapping } from "./field-types.js";
 import { getFormBySlug, getPublishedVersionSchema } from "./queries.js";
-import { applyActions, applyFieldsToPerson, createPersonFromSubmission, FormApplyError, splitCoreAndCustomValues, submissionDni } from "./apply.js";
+import { applyActions, applyFieldsToPerson, createPersonFromSubmission, splitCoreAndCustomValues, submissionDni } from "./apply.js";
 import { insertSubmissionEvents } from "./events.js";
 import type { FormApplyDataPolicy, FormPersonCreationPolicy } from "../db/schema.js";
 import { matchPerson } from "./matching.js";
@@ -19,7 +20,29 @@ export type SubmitResult =
   | { kind: "not_found" }
   | { kind: "not_available" }
   | { kind: "rate_limited" }
+  /** Enviado demasiado rápido tras abrir el formulario: se reintenta en unos segundos (nunca se guarda). */
+  | { kind: "too_fast" }
   | { kind: "validation_error"; fieldErrors: Record<string, string> };
+
+/**
+ * Señales anti-automatización que manda el navegador junto con el formulario (S3). Son FRICCIÓN contra bots simples, no una
+ * frontera de seguridad: el control real son los límites atómicos por enlace, por IP y por persona (DNI) de `submitForm`.
+ */
+export interface SubmitSignals {
+  /** Campo trampa (`__website_url`): invisible para una persona. Si trae algo, quien lo mandó es un programa. */
+  honeypot?: string;
+  /** Instante (ms epoch, del SERVIDOR) en que se renderizó el formulario. Ausente en páginas abiertas antes de este cambio. */
+  renderedAtMs?: number;
+}
+
+/** Tope razonable para una clave de idempotencia (un UUID mide 36). */
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+
+/** Nadie lee y completa un formulario en menos de esto, ni siquiera con autocompletado del teléfono. */
+export const MIN_FILL_MS = 1500;
+/** Un mismo DNI no se envía más de N veces por formulario en la ventana (reenvíos abusivos / relleno de la bandeja). */
+const SAME_PERSON_SUBMIT_LIMIT = 5;
+const SAME_PERSON_WINDOW_MINUTES = 60;
 
 function isWithinWindow(now: Date, opensAt: Date | null, closesAt: Date | null): boolean {
   if (opensAt && now < opensAt) return false;
@@ -50,6 +73,7 @@ const DEFAULT_NOT_AVAILABLE = "Este formulario no está disponible en este momen
 export async function getPublicForm(
   slug: string
 ): Promise<{ kind: "ok"; formId: string; ownerOrganizationId: string; schema: FormVersionSchema } | { kind: "not_found" } | { kind: "not_available" }> {
+  if (isUnsafeText(slug)) return { kind: "not_found" };
   const form = await getFormBySlug(slug);
   if (!form) return { kind: "not_found" };
   if (form.status !== "published") return { kind: "not_available" };
@@ -66,10 +90,21 @@ export async function submitForm(
   rawEntries: Record<string, string | string[]>,
   idempotencyKey: string,
   ip: string,
-  userAgent: string | undefined
+  userAgent: string | undefined,
+  signals: SubmitSignals = {}
 ): Promise<SubmitResult> {
-  const rate = await checkPublicLinkRateLimit("form_submit", slug, ip, { perIdentifierLimit: 60, perIpLimit: 300 });
-  if (!rate.allowed) return { kind: "rate_limited" };
+  // Un slug con texto que la base no guarda no puede existir: mismo resultado que cualquier formulario inexistente, sin tocar la base.
+  if (isUnsafeText(slug)) return { kind: "not_found" };
+
+  // Reserva ATÓMICA del intento (S5). Tope por formulario holgado: una inscripción a un acto puede recibir cientos de envíos en
+  // minutos y bloquearlos a todos por llegar juntos sería el daño; lo que frena el abuso son el tope por IP y el de «misma persona».
+  const attempt = await consumePublicLinkAttempt("form_submit", slug, ip, { perIdentifierLimit: 600, perIpLimit: 300 });
+  if (!attempt.allowed) return { kind: "rate_limited" };
+
+  // La clave de idempotencia la manda el navegador (argumento de la Server Action): no puede traer texto que la base no guarda.
+  if (isUnsafeText(idempotencyKey) || idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    return { kind: "validation_error", fieldErrors: { __form: "Recargá la página e intentá de nuevo." } };
+  }
 
   const form = await getFormBySlug(slug);
   if (!form) return { kind: "not_found" };
@@ -79,8 +114,26 @@ export async function submitForm(
   if (!schema) return { kind: "not_available" };
   if (!isWithinWindow(new Date(), form.opensAt, form.closesAt)) return { kind: "not_available" };
 
+  const successMessage = form.successMessage?.trim() || DEFAULT_SUCCESS_MESSAGE;
+
+  // Honeypot: a un programa que llenó el campo trampa se le contesta «gracias» (no se le avisa) y no se guarda nada.
+  if (signals.honeypot && signals.honeypot.trim() !== "") return { kind: "ok", successMessage };
+  // Demasiado rápido: puede ser una persona real (autocompletado), así que se pide reintentar en vez de descartar en silencio.
+  // Si el instante falta o es inverosímil (futuro), no hay señal confiable y se deja pasar.
+  if (signals.renderedAtMs !== undefined) {
+    const elapsed = Date.now() - signals.renderedAtMs;
+    if (elapsed >= 0 && elapsed < MIN_FILL_MS) return { kind: "too_fast" };
+  }
+
+  // Caracteres que la base no puede guardar (byte nulo, sustitutos sueltos): se rechaza ese campo, nunca se "limpia" ni se da error 500.
+  const unsafeFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawEntries)) {
+    if (key.startsWith("__")) continue;
+    if (hasUnsafeText(value)) unsafeFields[key] = UNSAFE_TEXT_MESSAGE;
+  }
+  if (Object.keys(unsafeFields).length > 0) return { kind: "validation_error", fieldErrors: unsafeFields };
+
   if (schema.consentText && rawEntries.__consent !== "true") {
-    await recordPublicLinkAttempt("form_submit", slug, ip, false);
     return { kind: "validation_error", fieldErrors: { __consent: "Tenés que aceptar para continuar." } };
   }
 
@@ -92,7 +145,6 @@ export async function submitForm(
       const key = String(issue.path[0] ?? "");
       if (key && !fieldErrors[key]) fieldErrors[key] = issue.message;
     }
-    await recordPublicLinkAttempt("form_submit", slug, ip, false);
     return { kind: "validation_error", fieldErrors };
   }
 
@@ -104,6 +156,24 @@ export async function submitForm(
 
   const db = await getDb();
 
+  // Reintento del MISMO envío (doble toque, recarga, red lenta): ya se procesó, no consume el tope de «misma persona».
+  const alreadyProcessed = await db.selectFrom("form_submissions").select("id").where("idempotency_key", "=", idempotencyKey).executeTakeFirst();
+  if (alreadyProcessed) {
+    await settlePublicLinkAttempt(attempt.attemptId, true);
+    return { kind: "ok", successMessage };
+  }
+
+  // Misma persona (DNI) enviando una y otra vez el mismo formulario. El DNI nunca se guarda en claro en el rastro del límite: se hashea.
+  const sameDni = submissionDni(splitCoreAndCustomValues(schema, normalizedValues, isCorePersonMapping).coreValues);
+  if (sameDni) {
+    const person = await consumePublicLinkAttempt("form_submit_person", hashRateLimitIdentifier("form_submit_person", `${form.id}:${sameDni}`), ip, {
+      perIdentifierLimit: SAME_PERSON_SUBMIT_LIMIT,
+      perIpLimit: Number.MAX_SAFE_INTEGER,
+      windowMinutes: SAME_PERSON_WINDOW_MINUTES,
+    });
+    if (!person.allowed) return { kind: "rate_limited" };
+  }
+
   const inserted = await db
     .insertInto("form_submissions")
     .values({
@@ -113,15 +183,14 @@ export async function submitForm(
       normalized_values: toJsonb(normalizedValues as never),
       idempotency_key: idempotencyKey,
       ip_address: ip,
-      user_agent: userAgent ?? null,
+      // Un User-Agent real nunca trae un byte nulo (el servidor HTTP lo rechaza); por defensa, si llegara, no se guarda.
+      user_agent: userAgent && !isUnsafeText(userAgent) ? userAgent : null,
     })
     .onConflict((oc) => oc.column("idempotency_key").doNothing())
     .returning("id")
     .executeTakeFirst();
 
-  await recordPublicLinkAttempt("form_submit", slug, ip, true);
-
-  const successMessage = form.successMessage?.trim() || DEFAULT_SUCCESS_MESSAGE;
+  await settlePublicLinkAttempt(attempt.attemptId, true);
 
   if (!inserted) {
     // Reintento/doble click con el mismo idempotency_key: ya se procesó,
@@ -141,8 +210,6 @@ export async function submitForm(
       .where("id", "=", inserted.id)
       .execute();
     // Con quién choca el DNI queda solo en la auditoría (MASTER_GLOBAL), no en el mensaje que ve quien revisa.
-    if (err instanceof FormApplyError && err.conflictPersonId) {
-    }
   }
 
   return { kind: "ok", successMessage };
@@ -195,7 +262,7 @@ async function processSubmission(
       .where("id", "=", submissionId)
       .execute();
     await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_person_created", person_id: personId, recorded_by: null, details: { policy: "when_valid_dni" } }]);
-    await applyActions(schema, personId, normalizedValues);
+    await applyActions(schema, personId, normalizedValues, ownerOrganizationId);
     return;
   }
 
@@ -252,7 +319,7 @@ async function processSubmission(
         await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_data_applied", person_id: outcome.personId, recorded_by: null, details: { mode: "fill_empty", fields: changes } }]);
       }
     }
-    await applyActions(schema, outcome.personId, normalizedValues);
+    await applyActions(schema, outcome.personId, normalizedValues, ownerOrganizationId);
     return;
   }
 

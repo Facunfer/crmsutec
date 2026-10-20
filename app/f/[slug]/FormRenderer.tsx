@@ -95,6 +95,7 @@ function Field({ field, error, associations }: { field: FormVersionField; error?
 export function FormRenderer({
   slug,
   idempotencyKey,
+  renderedAtMs,
   name,
   consentText,
   fields,
@@ -102,6 +103,8 @@ export function FormRenderer({
 }: {
   slug: string;
   idempotencyKey: string;
+  /** Instante del servidor en que se armó la página: base de la regla «no se completa un formulario en un instante». */
+  renderedAtMs: number;
   name: string;
   consentText: string | null;
   fields: FormVersionField[];
@@ -122,6 +125,14 @@ export function FormRenderer({
   return (
     <form action={dispatch} className="space-y-4">
       <h1 className="text-lg font-semibold text-brand-900">{name}</h1>
+      {/* Señales anti-bot: la trampa queda fuera de pantalla (no display:none) y oculta a lectores de pantalla y teclado. */}
+      <input type="hidden" name="__rt" value={renderedAtMs} />
+      <div aria-hidden="true" style={{ position: "absolute", left: "-10000px", width: "1px", height: "1px", overflow: "hidden" }}>
+        <label>
+          No completar este campo
+          <input type="text" name="__website_url" tabIndex={-1} autoComplete="off" defaultValue="" />
+        </label>
+      </div>
       {visibleFields.map((field) => (
         <Field key={field.key} field={field} error={state.fieldErrors?.[field.key]} associations={associations} />
       ))}

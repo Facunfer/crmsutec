@@ -67,7 +67,7 @@ export default async function ReunionFichaPage({ params }: { params: Promise<{ i
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-brand-100 px-3 py-1 text-xs text-brand-700">{STATUS_LABEL[meeting.displayStatus]}</span>
-          {isOwner && meeting.status !== "draft" ? (
+          {isOwner && can(actor, "meetings.accredit") && meeting.status !== "draft" ? (
             <Link href={`/reuniones/${id}/asistencia`} className="rounded-md border border-brand-200 px-3 py-1.5 text-sm text-brand-700 hover:bg-brand-50">
               QR y asistencia
             </Link>

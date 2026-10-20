@@ -5,7 +5,7 @@ import type { FormApplyDataPolicy, FormPersonCreationPolicy, FormStatus, FormSub
 import { parseFieldValidation, type FieldValidation } from "./field-types.js";
 import type { FormVersionSchema } from "./version-schema.js";
 import type { SessionUser } from "../permissions/can.js";
-import { canAccessForm, orgScope } from "../scope/organizations.js";
+import { canAccessForm, isUuid, orgScope } from "../scope/organizations.js";
 import { can } from "../permissions/can.js";
 import { maskSubmissionPayload } from "./sensitive.js";
 
@@ -498,6 +498,25 @@ export async function listPendingDuplicateCandidates(actor: SessionUser, canSeeS
  * El visitante no tiene sesión ni alcance, así que el alcance lo fija la
  * unidad del formulario (configurada en el servidor), nunca lo que envíe.
  */
+/**
+ * ¿Puede un formulario de esta unidad sumar personas a esta asociación? MISMA regla que `listAssociationsForPublicForm` (activa y de
+ * la unidad del formulario o sus dependientes), pero para UN id. Es la compuerta del SERVIDOR (S2): lo que el visitante manda en un
+ * campo «asociación» es un UUID cualquiera, y ocultar opciones en pantalla no impide que alguien arme el pedido a mano.
+ */
+export async function isAssociationAllowedForForm(associationId: string, ownerOrganizationId: string): Promise<boolean> {
+  if (!isUuid(associationId) || !isUuid(ownerOrganizationId)) return false;
+  const db = await getDb();
+  const result = await sql<{ ok: boolean }>`
+    select exists (
+      select 1 from associations a
+      where a.id = ${associationId}::uuid
+        and a.status = 'active'
+        and a.owner_organization_id in (select organization_id from organization_descendants(${ownerOrganizationId}::uuid))
+    ) as ok
+  `.execute(db);
+  return result.rows[0]?.ok === true;
+}
+
 export async function listAssociationsForPublicForm(
   ownerOrganizationId: string
 ): Promise<Array<{ id: string; name: string }>> {

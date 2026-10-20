@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { respondToInvitation, checkInByInvitationToken } from "@/lib/meetings/public";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 export interface RespondState {
   status: "idle" | "ok" | "error";
@@ -15,7 +16,7 @@ export async function respondAction(
   response: "confirmed" | "declined"
 ): Promise<RespondState> {
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
 
   const result = await respondToInvitation(token, response, ip);
 
@@ -39,7 +40,7 @@ export interface CheckinState {
 
 export async function checkinAction(token: string, _prevState: CheckinState): Promise<CheckinState> {
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
 
   const result = await checkInByInvitationToken(token, ip, userAgent);

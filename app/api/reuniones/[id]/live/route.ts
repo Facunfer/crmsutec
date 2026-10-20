@@ -7,7 +7,7 @@ import { getLivePanelData, quickSearchForAccreditation } from "@/lib/attendance/
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return new Response("No autorizado.", { status: 401 });
-  if (!can(user, "meetings.view")) return new Response("No tenés permiso.", { status: 403 });
+  if (!can(user, "meetings.accredit")) return new Response("No tenés permiso.", { status: 403 });
 
   const { id } = await params;
   const search = request.nextUrl.searchParams.get("q");

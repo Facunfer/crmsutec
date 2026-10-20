@@ -1,7 +1,8 @@
 import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import { checkPublicLinkRateLimit, recordPublicLinkAttempt } from "../security/public-rate-limit.js";
+import { isUnsafeText } from "../security/text-safety.js";
+import { consumePublicLinkAttempt, hashRateLimitIdentifier, settlePublicLinkAttempt } from "../security/public-rate-limit.js";
 import { normalizeDni, normalizeEmail, normalizePhone } from "../people/normalize.js";
 import { isQrWithinWindow, verifyQrSignature, DEFAULT_ROTATION_SECONDS } from "./qr.js";
 import { signPendingCheckin, verifyPendingCheckin, type PendingIdentification } from "./session-tokens.js";
@@ -23,21 +24,23 @@ const PUBLIC_CHECKIN_STATUSES = new Set(["scheduled", "in_progress"]);
 
 /** Primer paso: validar el QR escaneado y decidir si abrir una sesión de check-in. */
 export async function resolveQrToken(token: string, ip: string): Promise<QrResolution> {
-  const rate = await checkPublicLinkRateLimit("checkin_qr", token.slice(0, 24), ip, { perIdentifierLimit: 60 });
-  if (!rate.allowed) return { kind: "rate_limited" };
+  // El prefijo de 24 caracteres del token de QR identifica a la REUNIÓN (todos los QR de una reunión comparten el comienzo del payload):
+  // el límite por identificador es en la práctica «por reunión» y se guarda hasheado (S1). Los umbrales contemplan un acto con cientos de
+  // asistentes escaneando casi a la vez, muchos detrás de la misma IP de un wifi (S5: no bloquear a personas legítimas).
+  const attempt = await consumePublicLinkAttempt("checkin_qr", hashRateLimitIdentifier("checkin_qr", token.slice(0, 24)), ip, {
+    perIdentifierLimit: 1500,
+    perIpLimit: 400,
+  });
+  if (!attempt.allowed) return { kind: "rate_limited" };
 
   const payload = verifyQrSignature(token);
   if (!payload || !isQrWithinWindow(payload, DEFAULT_ROTATION_SECONDS)) {
-    await recordPublicLinkAttempt("checkin_qr", token.slice(0, 24), ip, false);
     return payload ? { kind: "expired" } : { kind: "invalid" };
   }
 
   const db = await getDb();
   const meeting = await db.selectFrom("meetings").selectAll().where("id", "=", payload.m).executeTakeFirst();
-  if (!meeting || meeting.qr_secret_version !== payload.v) {
-    await recordPublicLinkAttempt("checkin_qr", token.slice(0, 24), ip, false);
-    return { kind: "invalid" };
-  }
+  if (!meeting || meeting.qr_secret_version !== payload.v) return { kind: "invalid" };
   if (meeting.status === "cancelled") return { kind: "cancelled" };
   if (!PUBLIC_CHECKIN_STATUSES.has(meeting.status)) return { kind: "not_active" };
 
@@ -48,7 +51,7 @@ export async function resolveQrToken(token: string, ip: string): Promise<QrResol
   const to = meeting.ends_at.getTime() + meeting.checkin_tolerance_after_minutes * 60_000;
   if (now < from || now > to) return { kind: "not_active" };
 
-  await recordPublicLinkAttempt("checkin_qr", token.slice(0, 24), ip, true);
+  await settlePublicLinkAttempt(attempt.attemptId, true);
   return { kind: "ok", meetingId: meeting.id, meetingName: meeting.name };
 }
 
@@ -112,21 +115,23 @@ export async function identifyForCheckin(
   lastName: string,
   ip: string
 ): Promise<IdentifyResult> {
-  const rate = await checkPublicLinkRateLimit("checkin_identify", `${meetingId}:${ip}`, ip, {
-    perIdentifierLimit: 40,
-    perIpLimit: 300,
+  // identificador = reunión + IP: equivale a un límite por IP dentro de la reunión. Un wifi de acto concentra cientos de personas en una IP.
+  const attempt = await consumePublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, {
+    perIdentifierLimit: 300,
+    perIpLimit: 400,
+    perIdentifierFailureLimit: 40, // quien prueba y falla sigue frenado como antes: 40 intentos fallidos por IP y reunión cada 10 min
   });
-  if (!rate.allowed) return { kind: "rate_limited" };
+  if (!attempt.allowed) return { kind: "rate_limited" };
 
   const dni = normalizeDni(identifier);
   const email = normalizeEmail(identifier);
   const phone = normalizePhone(identifier);
   const lastNameNormalized = lastName.trim().toLowerCase();
 
-  const fail = async (): Promise<IdentifyResult> => {
-    await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, false);
-    return { kind: "not_found" };
-  };
+  const fail = async (): Promise<IdentifyResult> => ({ kind: "not_found" });
+
+  // Texto que la base no guarda (byte nulo): no puede ser el dato de nadie. Misma respuesta que cualquier dato inexistente.
+  if (isUnsafeText(identifier) || isUnsafeText(lastName)) return fail();
 
   if (!lastNameNormalized || (!dni && !email && !phone)) return fail();
 
@@ -186,7 +191,7 @@ export async function identifyForCheckin(
     .where("person_id", "=", person.id)
     .executeTakeFirst();
 
-  await recordPublicLinkAttempt("checkin_identify", `${meetingId}:${ip}`, ip, true);
+  await settlePublicLinkAttempt(attempt.attemptId, true);
 
   if (existingAttendance?.revoked_at) return { kind: "already_processed" };
   if (existingAttendance) {
@@ -212,8 +217,8 @@ export async function confirmCheckin(confirmToken: string, ip: string, userAgent
   const pending = verifyPendingCheckin(confirmToken);
   if (!pending) return { kind: "invalid" };
 
-  const rate = await checkPublicLinkRateLimit("checkin_confirm", `${pending.m}:${ip}`, ip, { perIdentifierLimit: 60, perIpLimit: 300 });
-  if (!rate.allowed) return { kind: "rate_limited" };
+  const attempt = await consumePublicLinkAttempt("checkin_confirm", `${pending.m}:${ip}`, ip, { perIdentifierLimit: 300, perIpLimit: 400 });
+  if (!attempt.allowed) return { kind: "rate_limited" };
 
   // Medio = QR; identificación = la que usó la persona (los tokens anteriores a B3 no la traían: se asume DNI).
   return recordCheckIn(pending.m, pending.p, "qr", pending.i ?? "dni", { ip, userAgent });

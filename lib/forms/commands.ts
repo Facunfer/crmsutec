@@ -11,6 +11,7 @@ import { FIELD_TYPES, isCorePersonMapping, parseFieldOptions, parseFieldValidati
 import { buildFieldValidation, parseOptionsText, type FieldInput, type FormMetaInput } from "./schema.js";
 import type { FormVersionSchema } from "./version-schema.js";
 import { dniPublishError } from "./publish-rules.js";
+import { isAssociationAllowedForForm } from "./queries.js";
 
 assertServerOnly("lib/forms/commands.ts");
 
@@ -230,6 +231,12 @@ export async function addAssociationAction(actor: SessionUser, formId: string, a
   if (!(await canAccessAssociation(actor, associationId))) throw new FormCommandError("La asociación no existe.");
 
   const db = await getDb();
+  // Además del alcance de QUIEN configura, la asociación tiene que estar dentro de la unidad del FORMULARIO: es la única que se respeta
+  // cuando el formulario se ejecuta públicamente (S2). Si no, la acción quedaría guardada pero nunca se aplicaría.
+  const form = await db.selectFrom("forms").select("owner_organization_id").where("id", "=", formId).executeTakeFirstOrThrow();
+  if (!(await isAssociationAllowedForForm(associationId, form.owner_organization_id))) {
+    throw new FormCommandError("La asociación debe ser activa y de la unidad del formulario (o una dependiente).");
+  }
   const maxSort = await db
     .selectFrom("form_actions")
     .select(({ fn }) => fn.max<number | null>("sort_order").as("max"))
@@ -251,6 +258,40 @@ export async function removeAction(actor: SessionUser, formId: string, actionId:
 
   const db = await getDb();
   await db.deleteFrom("form_actions").where("id", "=", actionId).where("form_id", "=", formId).execute();
+}
+
+/**
+ * No se publica una configuración que sume personas a asociaciones fuera del alcance del formulario (S2). Es la compuerta del PERSONAL:
+ * el error es claro y accionable para quien configura. El servidor sigue validando cada respuesta pública (`applyActions`), que ignora
+ * en silencio lo inválido sin revelar nada al visitante; esto evita llegar a ese punto. El nombre de la asociación solo se muestra si
+ * quien publica tiene alcance sobre ella; nunca se muestran ids.
+ */
+async function assertAssociationActionsInScope(
+  actor: SessionUser,
+  ownerOrganizationId: string,
+  actions: Array<{ actionType: string; config: { associationId?: string } | null }>
+): Promise<void> {
+  const problems: string[] = [];
+  const db = await getDb();
+  let position = 0;
+  for (const action of actions) {
+    position += 1;
+    if (action.actionType !== "add_to_association") continue;
+    const associationId = action.config?.associationId;
+    if (associationId && (await isAssociationAllowedForForm(associationId, ownerOrganizationId))) continue;
+    let label = "";
+    if (associationId && isUuid(associationId) && (await canAccessAssociation(actor, associationId))) {
+      const row = await db.selectFrom("associations").select("name").where("id", "=", associationId).executeTakeFirst();
+      if (row) label = ` («${row.name}»)`;
+    }
+    problems.push(`n.º ${position}${label}`);
+  }
+  if (problems.length === 0) return;
+  throw new FormCommandError(
+    `No se puede publicar: ${problems.length === 1 ? "la acción «Sumar a una asociación»" : "las acciones «Sumar a una asociación»"} ${problems.join(", ")} ` +
+      `${problems.length === 1 ? "apunta" : "apuntan"} a una asociación que no pertenece a la unidad del formulario, está inactiva o ya no existe. ` +
+      `Quitá ${problems.length === 1 ? "esa acción" : "esas acciones"} o reemplazala${problems.length === 1 ? "" : "s"} por una asociación de la unidad del formulario.`
+  );
 }
 
 /**
@@ -283,6 +324,7 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
   if (dniError) throw new FormCommandError(dniError);
 
   const actions = await db.selectFrom("form_actions").selectAll().where("form_id", "=", formId).orderBy("sort_order", "asc").execute();
+  await assertAssociationActionsInScope(actor, form.owner_organization_id, actions.map((a) => ({ actionType: a.action_type, config: (a.config ?? {}) as { associationId?: string } })));
 
   const policy = (form.identification_policy ?? {}) as { matchFields?: string[] };
   const snapshot: FormVersionSchema = {
@@ -327,7 +369,7 @@ export async function changeFormStatus(actor: SessionUser, formId: string, targe
   if (!(await canAccessForm(actor, formId))) throw new FormCommandError("El formulario no existe.");
 
   const db = await getDb();
-  const form = await db.selectFrom("forms").select(["status", "published_version"]).where("id", "=", formId).executeTakeFirst();
+  const form = await db.selectFrom("forms").select(["status", "published_version", "owner_organization_id"]).where("id", "=", formId).executeTakeFirst();
   if (!form) throw new FormCommandError("El formulario no existe.");
 
   if (target === "archived") {
@@ -343,6 +385,9 @@ export async function changeFormStatus(actor: SessionUser, formId: string, targe
     const versionFields = ((version?.schema as unknown as FormVersionSchema | undefined)?.fields ?? []) as FormVersionSchema["fields"];
     const versionDniError = dniPublishError(versionFields);
     if (versionDniError) throw new FormCommandError(versionDniError);
+    // Lo mismo con las acciones de la versión guardada: se reactiva tal cual, así que se valida contra el alcance ACTUAL del formulario.
+    const versionActions = ((version?.schema as unknown as FormVersionSchema | undefined)?.actions ?? []) as FormVersionSchema["actions"];
+    await assertAssociationActionsInScope(actor, form.owner_organization_id, versionActions);
   }
 
   await db.updateTable("forms").set({ status: target, updated_at: new Date() }).where("id", "=", formId).execute();

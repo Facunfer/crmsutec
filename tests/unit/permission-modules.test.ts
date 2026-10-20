@@ -52,6 +52,7 @@ const EXPECTED: Record<ModuleKey, string[]> = {
     "meetings.change_status",
     "meetings.manage_invitations",
     "meetings.attendance_manual",
+    "meetings.accredit",
   ],
   mailing: [
     "mailing.view",

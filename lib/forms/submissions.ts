@@ -118,7 +118,7 @@ export async function linkSubmissionToPerson(actor: SessionUser, input: { submis
     await resolvePendingCandidates(trx as never, sub.id, actor.id, input.personId, false);
     return { changed: true };
   }).then(async (r) => {
-    if (r.changed) await applyActions(sub.schema, input.personId, sub.normalizedValues);
+    if (r.changed) await applyActions(sub.schema, input.personId, sub.normalizedValues, sub.form.ownerOrganizationId);
     return r;
   });
 }
@@ -154,7 +154,7 @@ export async function createPersonFromUnlinkedSubmission(actor: SessionUser, inp
     await insertSubmissionEvents(trx, [{ submission_id: sub.id, event_type: "person_created", person_id: personId, recorded_by: actor.id, reason: input.reason?.trim() || null }]);
     await resolvePendingCandidates(trx as never, sub.id, actor.id, null, true);
   });
-  await applyActions(sub.schema, personId, sub.normalizedValues);
+  await applyActions(sub.schema, personId, sub.normalizedValues, sub.form.ownerOrganizationId);
   return { personId };
 }
 

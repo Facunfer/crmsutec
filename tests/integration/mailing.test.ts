@@ -655,8 +655,10 @@ describe("rate limit de la baja pública", () => {
     const other = tokens.createUnsubscribeToken(randomUUID(), SECRET);
     expect(await limiter.allowUnsubscribeAttempt(other, "203.0.113.9")).toBe(true);
     // x-forwarded-for inválido no rompe la base (inet)
-    expect(limiter.normalizeClientIp("no-es-una-ip, 1.1.1.1")).toBe("127.0.0.1");
-    expect(limiter.normalizeClientIp("198.51.100.7, 10.0.0.1")).toBe("198.51.100.7");
+    const { resolveClientIp } = await import("../../lib/security/client-ip.js");
+    expect(resolveClientIp(new Headers({ "x-forwarded-for": "1.1.1.1, no-es-una-ip" }), 1)).toBe("127.0.0.1");
+    // S4: manda la entrada que agregó NUESTRO proxy (la de la derecha), no la que escribió el cliente (la de la izquierda).
+    expect(resolveClientIp(new Headers({ "x-forwarded-for": "6.6.6.6, 198.51.100.7" }), 1)).toBe("198.51.100.7");
   });
 });
 

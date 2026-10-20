@@ -61,6 +61,8 @@ Los tres comparten la misma causa raíz: el enmascarado de `people.view_sensitiv
 
 ## 7. Rate limiting (D13)
 
+Fase F0: los límites públicos se reservan de forma atómica (`consumePublicLinkAttempt`: locks consultivos + conteo + inserción en una transacción), los tokens nunca se guardan como identificador (hash `h1:`), la IP sale solo de lo que agregó nuestro proxy y el rastro se depura con `purge_public_link_attempts` (30 días). Detalle y despliegue: `docs/F0-SEGURIDAD-INFORME-Y-DESPLIEGUE.md`.
+
 Todo guardado en tabla (`login_attempts`, `public_link_attempts`), nunca en memoria de proceso — sobrevive a un restart y funciona igual con múltiples instancias del servidor. Scopes activos: login, `invitation_view`, `invitation_respond`, `checkin_qr`, `checkin_identify`, `checkin_confirm`, `invitation_checkin`, `form_submit`. Umbrales altos a propósito (cientos de personas pueden compartir la misma IP en un acto/asamblea).
 
 ## 8. Auditoría y trazabilidad (R8)

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { loadMailConfig } from "@/lib/mailing/config";
 import { confirmUnsubscribe } from "@/lib/mailing/suppressions";
 import { allowUnsubscribeAttempt } from "@/lib/mailing/unsubscribe-limit";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 /** Detrás de nginx request.url trae el host interno: se redirige siempre al dominio público configurado. */
 function publicUrl(path: string, request: NextRequest): URL {
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  if (!(await allowUnsubscribeAttempt(token, request.headers.get("x-forwarded-for")))) {
+  if (!(await allowUnsubscribeAttempt(token, resolveClientIp(request.headers)))) {
     return new NextResponse("Demasiados intentos. Probá de nuevo en unos minutos.", { status: 429, headers: { "Retry-After": "600" } });
   }
   const result = await confirmUnsubscribe(token);

@@ -7,6 +7,8 @@ import { verifyPassword } from "@/lib/auth/passwords";
 import { checkLoginRateLimit, recordLoginAttempt } from "@/lib/auth/rate-limit";
 import { createSession } from "@/lib/auth/session";
 import { setSessionCookie } from "@/lib/auth/cookies";
+import { resolveClientIp } from "@/lib/security/client-ip";
+import { isUnsafeText } from "@/lib/security/text-safety";
 
 export interface LoginState {
   error?: string;
@@ -21,9 +23,11 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   if (!email || !password) {
     return { error: "Completá email y contraseña." };
   }
+  // Un email con texto que la base no guarda no puede ser de ninguna cuenta: mismo mensaje genérico, sin consulta ni error 500.
+  if (isUnsafeText(email)) return { error: GENERIC_ERROR };
 
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
 
   const rateLimit = await checkLoginRateLimit(email, ip);

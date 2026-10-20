@@ -43,6 +43,8 @@ export interface LivePanelData {
  * su alcance). null si la reunión no existe o está fuera del alcance.
  */
 export async function getLivePanelData(actor: SessionUser, meetingId: string): Promise<LivePanelData | null> {
+  // La autorización vive también acá (no solo en la ruta): cualquier otro llamador queda cubierto (S6).
+  if (!can(actor, "meetings.accredit")) return null;
   if (!isUuid(meetingId)) return null;
   const db = await getDb();
   const canManage = can(actor, "meetings.attendance_manual");
@@ -124,6 +126,7 @@ export async function quickSearchForAccreditation(
   meetingId: string,
   search: string
 ): Promise<QuickSearchResult[]> {
+  if (!can(actor, "meetings.accredit")) return [];
   const term = search.trim();
   if (term.length < 2) return [];
   if (!isUuid(meetingId)) return [];

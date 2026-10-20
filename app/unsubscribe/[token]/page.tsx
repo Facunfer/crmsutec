@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import { previewUnsubscribe } from "@/lib/mailing/suppressions";
 import { allowUnsubscribeAttempt } from "@/lib/mailing/unsubscribe-limit";
+import { getRequestClientIp } from "@/lib/security/request-ip";
 
 export const metadata: Metadata = {
   title: "Baja de comunicaciones",
@@ -25,8 +25,7 @@ export default async function UnsubscribePage({
   const { token } = await params;
   const sp = await searchParams;
   const box = "mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center gap-4 px-4 text-center";
-  const hdrs = await headers();
-  if (!(await allowUnsubscribeAttempt(token, hdrs.get("x-forwarded-for")))) {
+  if (!(await allowUnsubscribeAttempt(token, await getRequestClientIp()))) {
     return (
       <main className={box}>
         <p className="text-base text-brand-700">Demasiados intentos. Probá de nuevo en unos minutos.</p>

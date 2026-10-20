@@ -7,6 +7,7 @@ import { getSessionUser } from "@/lib/auth/guard";
 import { hashPassword, validatePasswordStrength, verifyPassword } from "@/lib/auth/passwords";
 import { setSessionCookie } from "@/lib/auth/cookies";
 import { bumpPermissionsVersion, createSession, revokeAllSessionsForUser } from "@/lib/auth/session";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 export interface ChangePasswordState {
   error?: string;
@@ -58,7 +59,7 @@ export async function changePassword(
   await bumpPermissionsVersion(user.id);
 
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
   const { token, expiresAt } = await createSession(user.id, { ip, userAgent });
   await setSessionCookie(token, expiresAt);

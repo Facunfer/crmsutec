@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { resolveQrToken } from "@/lib/attendance/checkin";
 import { signCheckinSession } from "@/lib/attendance/session-tokens";
 import { CHECKIN_SESSION_COOKIE } from "@/lib/attendance/constants";
+import { resolveClientIp } from "@/lib/security/client-ip";
 
 /**
  * Punto de entrada del QR (sección 12.1): valida la firma y la ventana,
@@ -14,7 +15,7 @@ import { CHECKIN_SESSION_COOKIE } from "@/lib/attendance/constants";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ qrToken: string }> }): Promise<Response> {
   const { qrToken } = await params;
   const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+  const ip = resolveClientIp(hdrs);
 
   const result = await resolveQrToken(qrToken, ip);
 

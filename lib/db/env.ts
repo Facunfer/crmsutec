@@ -20,6 +20,10 @@ const envSchema = z.object({
   SUTECBA_SESSION_SECRET: z.string().min(32).optional(),
   SUTECBA_TOKEN_SECRET: z.string().min(32).optional(),
   SUTECBA_QR_SECRET: z.string().min(32).optional(),
+  /** `true` = esta instalación no usa acreditación por QR: el secreto deja de ser obligatorio en producción (ver lib/attendance/qr-config.ts). */
+  SUTECBA_QR_DISABLED: z.enum(["true", "false"]).optional(),
+  /** Cantidad de proxies PROPIOS delante de la app (default 1 = nginx). 0 = expuesta directo. Ver lib/security/client-ip.ts. */
+  SUTECBA_TRUSTED_PROXY_HOPS: z.string().regex(/^[0-5]$/, "debe ser un entero de 0 a 5").optional(),
   SUTECBA_PUBLIC_BASE_URL: z.string().url().optional(),
 });
 

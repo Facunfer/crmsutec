@@ -66,7 +66,7 @@ describe("PGlite local limpio (SUTECBA_ENV=local)", () => {
     expect(out).toContain("0043_forms_links_and_provenance.sql OK");
     expect(out).toContain("0044_mailing_mvp.sql OK");
     expect(out).toContain("0045_mailing_provider_resend.sql OK");
-    expect(out).toContain("21 migración(es) aplicada(s)");
+    expect(out).toContain("23 migración(es) aplicada(s)");
     expect(status).toBe(0);
   }, 300000);
 
@@ -79,7 +79,7 @@ describe("PGlite local limpio (SUTECBA_ENV=local)", () => {
   it("15) ejecuta el seed actualizado después de migrar, y es idempotente", () => {
     const first = run("scripts/seed.ts");
     expect(first.out).toContain("11 módulos");
-    expect(first.out).toContain("46 permisos");
+    expect(first.out).toContain("47 permisos");
     expect(first.status).toBe(0);
 
     const second = run("scripts/seed.ts");
