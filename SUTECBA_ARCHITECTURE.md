@@ -151,7 +151,7 @@ Ver el reporte completo de la Etapa 0 (sección de chat, no repetido acá para n
 - **Adaptado**: permisos y resolvedor de alcance (estructura sí, contenido de dominio no), única ruta de escritura para trazabilidad, wrapper de AG Grid, sidebar responsive, wrappers de Recharts.
 - **Descartado**: todo el contenido territorial (comunas, verticales, tags PROF/NAC), geocodificación USIG, mapa de relacionamiento, consultas predefinidas, scripts de paridad, SSO con Reclamos CABA, adaptación PWA/móvil completa (se evalúa aparte si SUTECBA la necesita).
 
-## 8. Decisiones (D1–D17, sección 6.1 del prompt)
+## 8. Decisiones (D1–D24)
 
 Formato: contexto → opciones → elección → motivo → cómo revertir.
 
@@ -268,6 +268,47 @@ Formato: contexto → opciones → elección → motivo → cómo revertir.
 - **Hallazgo real (corregido antes de mergear, sin llegar a producir un dato mal mostrado)**: la función que arma las claves "YYYY-MM" de los últimos 12 meses leía `getUTCMonth()` de `new Date()` directo, mientras que el lado SQL correctamente hace `AT TIME ZONE '-03:00'` antes de truncar a mes (mismo criterio que D15/`lib/datetime.ts`). Como Buenos Aires siempre está *detrás* de UTC, durante las primeras ~3 horas de cada mes en UTC (que en Buenos Aires todavía son el mes anterior) las dos claves habrían quedado desincronizadas y los registros del mes en curso se habrían mostrado como si no tuvieran mes. Corregido restando el offset fijo antes de leer año/mes en el lado JS, para que las dos mitades (SQL y JS) usen siempre el mismo criterio de zona horaria.
 - **Permiso ajustado de paso**: al revisar el catálogo se notó que OPERADOR (el rol operativo de uso diario) no tenía `visualization.view` ni ningún `forms.*`, a pesar de tener alta/edición en Personas/Asociaciones/Reuniones — una asimetría que no tenía justificación de negocio documentada. Se agregó `visualization.view` y `forms.view/create/edit/publish/review_duplicates` a OPERADOR (no `forms.export_submissions`, igual que tampoco tiene `people.export`, por coherencia).
 - **Cómo revertir**: no aplica sin cambiar de librería de gráficos; las métricas son consultas, agregar/quitar una no requiere migración.
+
+### D19 — Actividades unificadas: reunión de un día o campaña con varias fechas, con su formulario y un QR por fecha (Etapa 1)
+Una **actividad** es una reunión de un día (una `meetings`) o una campaña con varias fechas (una `campaigns` y una `meetings` por fecha). Se crea en
+**una sola transacción** (`lib/activities/create.ts`): campaña, reuniones, formulario con su plantilla (nombre, apellido, DNI, email, teléfono) y preguntas
+propias, y su versión publicada. Si algo falla no queda nada. Permisos: `meetings.create` + unidad dentro del alcance (y `meetings.change_status` si se
+publica); el formulario se crea y publica bajo esos mismos permisos, **sin exigir el módulo Formularios**. Cada fecha tiene su propio QR (`qr_mode` fijo o
+rotativo, por fecha). El **tablero** (`/reuniones/actividad/{reunion|campana}/{id}`) reúne fechas, QR y formulario; `/reuniones/nueva` es el alta.
+
+### D20 — La respuesta al formulario inscribe (revierte «completar un formulario nunca inscribe», 0043)
+`forms.enrollment_mode` (0048): `never` (por defecto, comportamiento anterior), `single_meeting`, `campaign_all`, `campaign_selected` (reservado: todavía no
+inscribe, necesita una pregunta de opción múltiple). Con un modo ≠ `never`, el procesamiento del envío inscribe **solo si la persona quedó vinculada o creada
+sin ambigüedad**: una respuesta sin vincular, en revisión o ambigua **nunca** inscribe (lo decide un operador). La inscripción es la canónica de B4
+(`meeting_participations` + `meeting_registration_events`), idempotente, respeta el estado de la reunión (no inscribe en canceladas ni finalizadas) y **no
+reactiva** una inscripción anulada por un operador. Autor: el usuario de sistema **«Sistema (formularios)»** (inactivo, sin acceso): una inscripción
+operativa exige `recorded_by` y «sin usuario» significaría histórica/importada, así que en vez de aflojar esas reglas se atribuye a este usuario. La
+provenance es el evento `auto_enrolled` (con `recorded_by` NULL, como los demás `auto_*`); una respuesta origina como máximo UNA inscripción por reunión
+(índice único que cubre `enrolled` y `auto_enrolled`). Un fallo al inscribir no afecta a la respuesta pública (queda guardada y vinculada; el operador puede
+inscribirla después). Crear personas desde el formulario sigue siendo explícito (`person_creation_policy`, «never» por defecto, regla R7).
+
+### D21 — La asistencia genera la interacción «Asistió a…» (revierte la «Opción B» de B3, 22/10/2026)
+Escanear el QR, usar el enlace personal o cargar la asistencia a mano deja una interacción automática («Asistió a reunión/capacitación/jornada: …») en la
+ficha, con la fecha **real** del check-in (hora exacta o solo el día; una asistencia manual de fecha desconocida no inventa una). `lib/interactions/
+participation-sync.ts › syncAttendanceInteractions`, dentro de la **misma transacción** que la asistencia. Idempotente (`source_key = meeting_attendance:<id>`);
+revocar la asistencia **anula** la interacción (no se borra) y restaurarla la **reactiva**; corregir la hora la actualiza; no suma otra si la persona ya tiene la
+de una participación «asistió» de la misma actividad. Es una interacción técnica de tipo «participación»: sigue sin contar como «contacto real» para el
+semáforo (B5), y la vista técnica del Master muestra ambos espejos.
+
+### D22 — Quién puede identificarse en el check-in
+Invitación vigente **o inscripción vigente** (por ejemplo, la que nace al responder el formulario) **o**, si la reunión lo permite, pertenencia a la unidad
+propietaria (`allow_uninvited_checkin`). Una inscripción anulada no cuenta. Sin esto, quien se inscribía por el formulario no podía escanear.
+
+### D23 — Registro de asistencia de una actividad
+Definiciones únicas (`lib/activities/attendance-report.ts`), siempre por persona distinta y dentro del alcance del usuario: **esperados** = inscriptos vigentes;
+**asistieron** = asistencia vigente; **ausentes** = esperados que no asistieron; **sin inscripción** = asistieron sin estar inscriptos. En campañas: resumen por
+fecha, matriz persona × fecha y «asistió a X de N». Trazabilidad por persona con los eventos de formulario, inscripción y asistencia (con motivos) más la
+interacción. Exportación CSV (`meetings.edit`) con enmascarado de DNI sin `people.view_sensitive` y protección anti-fórmulas.
+
+### D24 — Usuario «solo reuniones» para todas las áreas
+El rol `REUNIONES` suma `meetings.create` y `meetings.edit` (0048). Un usuario «solo reuniones» es: rol `REUNIONES`, **un solo módulo habilitado** (`reuniones`) y
+alcance en la unidad raíz con descendientes. Sin el módulo habilitado los permisos no rigen. El master crea para todas las áreas; ADMIN/OPERADOR con alcance
+crean solo en su órbita (`canActorOwnInOrganization`).
 
 ## 9. Otras decisiones menores (autonomía, sección 16 del prompt)
 
