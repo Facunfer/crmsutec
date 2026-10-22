@@ -76,6 +76,8 @@ export type IdentifyResult =
  * reunión, decididas a partir de la reunión (ya resuelta por su QR/token
  * válido) y nunca por una búsqueda global:
  *  - quien tiene una invitación vigente a esta reunión; o
+ *  - quien tiene una INSCRIPCIÓN vigente en esta reunión (por ejemplo, la que nace al responder el formulario de la actividad); una
+ *    inscripción anulada no cuenta; o
  *  - si la reunión permite acreditación sin invitación, quien pertenece a la
  *    unidad propietaria de la reunión o a sus dependientes.
  * Una persona de otra unidad (o sin unidad) no aparece: para el endpoint es
@@ -88,6 +90,13 @@ function eligibleForMeeting(meeting: { id: string; owner_organization_id: string
       where mi.meeting_id = ${meeting.id}::uuid
         and mi.person_id = ${sql.ref(personColumn)}
         and mi.withdrawn_at is null
+    )
+    or exists (
+      select 1 from meeting_participations r
+      where r.meeting_id = ${meeting.id}::uuid
+        and r.person_id = ${sql.ref(personColumn)}
+        and r.participation_kind = 'registration'
+        and r.voided_at is null
     )
     or (
       ${meeting.allow_uninvited_checkin}::boolean

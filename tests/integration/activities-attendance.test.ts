@@ -316,3 +316,26 @@ describe("1d · de punta a punta: inscripto por formulario → escanea el QR →
     expect(i!.owner_organization_id).toBe(orgB);
   });
 });
+
+describe("1d · quién puede escanear: invitados e inscriptos", () => {
+  it("una persona INSCRIPTA (por ejemplo, desde el formulario) puede escanear aunque no esté invitada ni la reunión admita no invitados; una inscripción anulada no", async () => {
+    const m = await meeting("in_progress", { allow_uninvited_checkin: false });
+    const inscripta = await person();
+    const anulada = await person();
+    const ajena = await person();
+    const reg = await import("../../lib/meetings/registrations.js");
+    await reg.enrollPerson(master, { meetingId: m.id, personId: inscripta.id, channel: "email", when: { kind: "now" } } as never);
+    await reg.enrollPerson(master, { meetingId: m.id, personId: anulada.id, channel: "email", when: { kind: "now" } } as never);
+    const db = await getDb();
+    const row = await db.selectFrom("meeting_participations").select("id").where("meeting_id", "=", m.id).where("person_id", "=", anulada.id).executeTakeFirstOrThrow();
+    await reg.voidEnrollment(master, { participationId: row.id, reason: "se anotó por error" });
+
+    const identify = (p: { dni: string; lastName: string }) => identifyForCheckin(m.id, p.dni, p.lastName, nextIp());
+    const ok = await identify(inscripta);
+    expect(ok.kind).toBe("need_confirmation");
+    if (ok.kind === "need_confirmation") expect((await confirmCheckin(ok.confirmToken, nextIp(), "ua")).kind).toBe("ok");
+    // ni anulada ni sin relación con la reunión: igual que una persona que no existe (sin revelar nada)
+    expect((await identify(anulada)).kind).toBe("not_found");
+    expect((await identify(ajena)).kind).toBe("not_found");
+  });
+});

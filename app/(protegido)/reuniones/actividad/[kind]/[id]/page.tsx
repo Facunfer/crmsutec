@@ -61,6 +61,16 @@ export default async function ActividadPage({ params }: { params: Promise<{ kind
         {hub.description ? <p className="mt-2 max-w-2xl text-sm text-brand-700">{hub.description}</p> : null}
       </div>
 
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-4 shadow-sm">
+        <div>
+          <h2 className="text-sm font-semibold text-brand-900">Asistencia</h2>
+          <p className="text-xs text-brand-500">Quiénes fueron y quiénes no{hub.kind === "campana" ? ", fecha por fecha" : ""}, con el historial de cada persona.</p>
+        </div>
+        <Link href={`/reuniones/actividad/${kind}/${id}/asistencia`} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">
+          Ver registro de asistencia
+        </Link>
+      </section>
+
       <section className="space-y-3 rounded-lg bg-white p-4 shadow-sm">
         <h2 className="text-sm font-semibold text-brand-900">Formulario de inscripción</h2>
         {hub.forms.length === 0 ? (

@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
 import { can, type SessionUser } from "../permissions/can.js";
@@ -118,4 +119,29 @@ export async function getPersonInteractionById(actor: SessionUser, id: string): 
     .executeTakeFirst();
 
   return row ? toItem(row) : null;
+}
+
+export interface AttendanceInteractionFact {
+  meetingId: string;
+  createdAt: Date;
+  updatedAt: Date;
+  status: InteractionStatus;
+  voidReason: string | null;
+}
+
+/**
+ * Interacciones AUTOMÁTICAS «Asistió a…» de UNA persona en las reuniones indicadas (trazabilidad de una actividad, Etapa 1f). Solo hechos
+ * técnicos del propio CRM (cuándo se registró y si se anuló): no es una regla de «contacto real» ni arma ningún filtro de contacto. El llamador
+ * ya comprobó el alcance de la persona y de la actividad.
+ */
+export async function listAttendanceInteractionFacts(personId: string, meetingIds: readonly string[]): Promise<AttendanceInteractionFact[]> {
+  if (meetingIds.length === 0) return [];
+  const db = await getDb();
+  const rows = await sql<{ meeting_id: string; created_at: Date; updated_at: Date; status: InteractionStatus; void_reason: string | null }>`
+    select pi.meeting_id, pi.created_at, pi.updated_at, pi.status, pi.void_reason
+    from person_interactions pi
+    where pi.person_id = ${personId}::uuid and pi.meeting_id = any(${[...meetingIds]}::uuid[]) and pi.source_key like 'meeting\\_attendance:%'
+    order by pi.created_at
+  `.execute(db);
+  return rows.rows.map((r) => ({ meetingId: r.meeting_id, createdAt: r.created_at, updatedAt: r.updated_at, status: r.status, voidReason: r.void_reason }));
 }
