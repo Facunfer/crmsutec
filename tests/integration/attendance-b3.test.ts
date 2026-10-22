@@ -526,21 +526,33 @@ describe("B3 · historial y constraints de base", () => {
 });
 
 describe("B3 · reglas semánticas", () => {
-  it("la asistencia NO crea interacciones (ni registrar, ni revocar, ni restaurar) y no toca las existentes", async () => {
+  it("la asistencia SÍ crea la interacción «Asistió a…» (decisión del titular, 22/10/2026): al registrarse; se anula al revocar y se reactiva al restaurar", async () => {
     const m = await meeting("in_progress");
     const p = await person();
     await invite(m.id, p);
     const before = await countOf("person_interactions");
     await checkInWithInvitationToken(m.id, p.id, nextIp(), "ua");
+    expect(await countOf("person_interactions")).toBe(before + 1);
+    const db = await getDb();
+    const interactionOf = async (personId: string) => {
+      const a = (await rows(m.id, personId))[0]!;
+      return db.selectFrom("person_interactions").selectAll().where("source_key", "=", `meeting_attendance:${a.id}`).execute();
+    };
+    expect((await interactionOf(p.id))[0]).toMatchObject({ status: "completed", meeting_id: m.id, person_id: p.id });
+
     await att.revokeAttendance(culturaOp, { meetingId: m.id, personId: p.id, reason: "x" });
+    expect((await interactionOf(p.id))[0]).toMatchObject({ status: "voided", void_reason: "La asistencia fue revocada" });
     await att.restoreAttendance(culturaOp, { meetingId: m.id, personId: p.id, reason: "y" });
+    expect((await interactionOf(p.id))[0]).toMatchObject({ status: "completed", void_reason: null });
+
     const q = await person();
     await reg(culturaOp, m.id, q.id);
-    const db = await getDb();
+    expect(await interactionOf(q.id)).toHaveLength(1);
+    expect(await countOf("person_interactions")).toBe(before + 2);
+    // reprocesar no duplica ni cambia nada
     const result = await syncParticipationInteractions(db, { meetingId: m.id, actorUserId: masterId });
     expect(result).toMatchObject({ created: 0, reactivated: 0, voided: 0 });
-    expect(await countOf("person_interactions")).toBe(before);
-    expect(await db.selectFrom("person_interactions").select("id").where("source_key", "like", "meeting_attendance:%").execute()).toHaveLength(0);
+    expect(await db.selectFrom("person_interactions").select("id").where("source_key", "like", "meeting_attendance:%").where("meeting_id", "=", m.id).execute()).toHaveLength(2);
   });
 
   it("attendance_status se ignora y nadie lo escribe: ni check-in, ni manual, ni finalizar la reunión", async () => {

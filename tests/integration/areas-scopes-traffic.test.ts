@@ -394,7 +394,7 @@ describe("Interacción automática por participación real (idempotente)", () =>
     expect((await syncParticipationInteractions(db, { actorUserId: masterId })).created).toBe(0);
   });
 
-  it("la ASISTENCIA no genera interacciones (B3, Opción B): ni al registrarse, ni al revocarse, ni al restaurarse", async () => {
+  it("la ASISTENCIA genera la interacción (decisión del titular, 22/10/2026): al reprocesar se crea una vez, al revocar se anula y al restaurar se reactiva", async () => {
     const db = await getDb();
     const inv = await db
       .insertInto("meeting_invitations")
@@ -406,15 +406,20 @@ describe("Interacción automática por participación real (idempotente)", () =>
       .values({ meeting_id: M.soloHacienda!, person_id: P.hRaiz!, invitation_id: inv.id, method: "qr", identification: "dni" } as never)
       .returning("id")
       .executeTakeFirstOrThrow();
-    const before = await db.selectFrom("person_interactions").select(sql<number>`count(*)::int`.as("n")).executeTakeFirstOrThrow();
+    const count = async () => (await db.selectFrom("person_interactions").select(sql<number>`count(*)::int`.as("n")).executeTakeFirstOrThrow()).n;
+    const before = await count();
     const result = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
-    expect(result.created).toBe(0);
-    expect((await db.selectFrom("person_interactions").select(sql<number>`count(*)::int`.as("n")).executeTakeFirstOrThrow()).n).toBe(before.n);
-    expect(await db.selectFrom("person_interactions").select("id").where("source_key", "=", `meeting_attendance:${att.id}`).execute()).toHaveLength(0);
-    // revocar / restaurar tampoco tocan interacciones
+    expect(result.created).toBe(1);
+    expect(await count()).toBe(before + 1);
+    expect(await db.selectFrom("person_interactions").select("id").where("source_key", "=", `meeting_attendance:${att.id}`).execute()).toHaveLength(1);
+    expect((await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId })).created).toBe(0);
+    // revocar anula; restaurar reactiva
     await db.updateTable("meeting_attendance").set({ revoked_at: new Date(), revoked_by: masterId, revoke_reason: "prueba" } as never).where("id", "=", att.id).execute();
     const afterRevoke = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
-    expect(afterRevoke).toMatchObject({ created: 0, voided: 0, reactivated: 0 });
+    expect(afterRevoke).toMatchObject({ created: 0, voided: 1, reactivated: 0 });
+    await db.updateTable("meeting_attendance").set({ revoked_at: null, revoked_by: null, revoke_reason: null } as never).where("id", "=", att.id).execute();
+    const afterRestore = await syncParticipationInteractions(db, { meetingId: M.soloHacienda!, actorUserId: masterId });
+    expect(afterRestore).toMatchObject({ created: 0, voided: 0, reactivated: 1 });
   });
 
   it("la restricción de base impide un date_only con hora inventada y una source_key repetida", async () => {

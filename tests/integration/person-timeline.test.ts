@@ -505,7 +505,9 @@ describe("B5 · línea de tiempo", () => {
 
   it("vista técnica: solo Master ve el espejo heredado, fuera del timeline", async () => {
     const { p } = await fullPerson();
-    expect((await tl.getPersonTechnicalInteractions(master, p)).length).toBe(1);
+    // 2 espejos técnicos: el de la participación y el de la ASISTENCIA manual del caso (la asistencia genera su interacción desde la Etapa 1d,
+    // decisión del titular del 22/10/2026). Ninguno aparece en el timeline ni cuenta como contacto real.
+    expect((await tl.getPersonTechnicalInteractions(master, p)).length).toBe(2);
     expect(await tl.getPersonTechnicalInteractions(culturaOp, p)).toEqual([]);
   });
 });

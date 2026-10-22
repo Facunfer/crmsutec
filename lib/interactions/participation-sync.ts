@@ -60,6 +60,14 @@ export const PARTICIPATION_SUBJECT = sql`case m.meeting_type
     when 'jornada' then 'Participó en jornada: ' || m.name
     else 'Participó en: ' || m.name end`;
 
+/** Texto de la interacción por ASISTENCIA (check-in real), según el tipo de actividad (sin datos personales). */
+export const ATTENDANCE_SUBJECT = sql`case m.meeting_type
+    when 'capacitacion' then 'Asistió a capacitación: ' || m.name
+    when 'operativo_salud' then 'Asistió a operativo de salud: ' || m.name
+    when 'jornada' then 'Asistió a jornada: ' || m.name
+    when 'reunion' then 'Asistió a reunión: ' || m.name
+    else 'Asistió a: ' || m.name end`;
+
 export const PARTICIPATION_OCCURRED_AT = sql`case when m.schedule_precision = 'exact_datetime' then m.starts_at
        else (m.event_date::timestamp at time zone ${sql.lit(BA_TIMEZONE)}) end`;
 
@@ -118,8 +126,9 @@ export async function syncParticipationInteractions(db: Db, scope: Participation
     return { created: fromParticipations.rows.length, reactivated: 0, voided: 0, skippedWithoutDate: Number(skipped.rows[0]?.n ?? 0) };
   }
 
-  // 2. La ASISTENCIA (meeting_attendance) NO genera interacciones (B3, Opción B): asistencia y contacto son dimensiones distintas.
-  //    Qué cuenta como «último contacto real» se define en B5. Revocar/restaurar una asistencia no toca interacciones.
+  // 2. La ASISTENCIA (meeting_attendance) SÍ genera interacciones (decisión del titular, 22/10/2026; revierte la «Opción B» de B3): escanear el
+  //    QR, usar el enlace personal o cargar la asistencia a mano deja «Asistió a…» en la ficha. Ver syncAttendanceInteractions.
+  const fromAttendance = await syncAttendanceInteractions(db, { meetingId: scope.meetingId, personId: scope.personId, actorUserId: scope.actorUserId });
 
   const skipped = await sql<{ n: number }>`
     select count(*)::int as n
@@ -130,9 +139,103 @@ export async function syncParticipationInteractions(db: Db, scope: Participation
   `.execute(db);
 
   return {
-    created: fromParticipations.rows.length,
-    reactivated: 0,
-    voided: 0,
+    created: fromParticipations.rows.length + fromAttendance.created,
+    reactivated: fromAttendance.reactivated,
+    voided: fromAttendance.voided,
     skippedWithoutDate: Number(skipped.rows[0]?.n ?? 0),
   };
+}
+
+export interface AttendanceSyncScope {
+  /** Asistencias puntuales (las que acaba de escribir un check-in o una carga manual). [] = nada que hacer, nunca «todo». */
+  attendanceIds?: readonly string[];
+  meetingId?: string;
+  personId?: string;
+  /** Autor de las interacciones nuevas. Sin él: quien cargó la asistencia a mano, el organizador o el creador de la reunión. */
+  actorUserId?: string | null;
+}
+
+export interface AttendanceSyncResult {
+  created: number;
+  reactivated: number;
+  voided: number;
+  /** Interacciones existentes cuya fecha se actualizó porque se corrigió la hora de la asistencia manual. */
+  updated: number;
+}
+
+const REVOKED_REASON = "La asistencia fue revocada";
+
+/**
+ * Interacción AUTOMÁTICA por ASISTENCIA (Etapa 1d). Una asistencia VIGENTE (`revoked_at IS NULL`) con fecha real (hora exacta o solo el día; la
+ * `unknown` de una carga manual no inventa una fecha: no genera nada) deja una interacción «Asistió a …» con la fecha REAL del check-in.
+ *   - Idempotente: `source_key = meeting_attendance:<id>` (UNIQUE parcial).
+ *   - Revocar la asistencia ANULA la interacción (`voided`, con motivo); restaurarla la REACTIVA. Nunca se borra nada.
+ *   - Corregir la hora de una asistencia manual actualiza la fecha de su interacción.
+ *   - Si la persona ya tiene la interacción de una participación «asistió» de ESA misma actividad (carga histórica), no se suma otra.
+ *   - Propietaria: la unidad de la persona (así la ve su área) o, si no tiene unidad, la de la actividad.
+ * Se invoca DENTRO de la transacción que escribe la asistencia (check-in público y carga manual): o quedan las dos cosas o ninguna.
+ */
+export async function syncAttendanceInteractions(db: Db, scope: AttendanceSyncScope = {}): Promise<AttendanceSyncResult> {
+  if (scope.attendanceIds !== undefined && scope.attendanceIds.length === 0) return { created: 0, reactivated: 0, voided: 0, updated: 0 };
+  const attendanceFilter = scope.attendanceIds === undefined ? sql`` : sql`and ma.id = any(${[...scope.attendanceIds]}::uuid[])`;
+  const meetingFilter = scope.meetingId ? sql`and m.id = ${scope.meetingId}::uuid` : sql``;
+  const personFilter = scope.personId ? sql`and p.id = ${scope.personId}::uuid` : sql``;
+  const actor = scope.actorUserId ?? null;
+  const filters = sql`${attendanceFilter} ${meetingFilter} ${personFilter}`;
+
+  const typeRow = await sql<{ id: string }>`select id from interaction_types where key = 'participation'`.execute(db);
+  const typeId = typeRow.rows[0]?.id;
+  if (!typeId) throw new Error("Falta el tipo de interacción «participation» (migración 0024).");
+
+  const created = await sql<{ id: string }>`
+    insert into person_interactions
+      (person_id, owner_organization_id, occurred_at, occurred_precision, interaction_type_id, subject, status, meeting_id, created_by, source_key)
+    select p.id, coalesce(p.organization_id, m.owner_organization_id), ma.checked_in_at, ma.occurred_precision, ${typeId}::uuid, ${ATTENDANCE_SUBJECT}, 'completed', m.id,
+           coalesce(${actor}::uuid, ma.registered_by, m.organizer_user_id, m.created_by), 'meeting_attendance:' || ma.id
+    from meeting_attendance ma
+    join meetings m on m.id = ma.meeting_id
+    join people p on p.id = ma.person_id
+    where ma.revoked_at is null and ma.checked_in_at is not null and ma.occurred_precision in ('exact_datetime', 'date_only') ${filters}
+      and not exists (
+        select 1 from person_interactions x
+        where x.person_id = ma.person_id and x.meeting_id = ma.meeting_id and x.source_key like 'meeting\\_participation:%' and x.status <> 'voided'
+      )
+      and coalesce(${actor}::uuid, ma.registered_by, m.organizer_user_id, m.created_by) is not null
+    on conflict (source_key) where source_key is not null do nothing
+    returning id
+  `.execute(db);
+
+  const voided = await sql<{ id: string }>`
+    update person_interactions pi
+    set status = 'voided', void_reason = ${REVOKED_REASON}, updated_at = now(), version = pi.version + 1
+    from meeting_attendance ma
+    join meetings m on m.id = ma.meeting_id
+    join people p on p.id = ma.person_id
+    where pi.source_key = 'meeting_attendance:' || ma.id and pi.status <> 'voided' and ma.revoked_at is not null ${filters}
+    returning pi.id
+  `.execute(db);
+
+  const reactivated = await sql<{ id: string }>`
+    update person_interactions pi
+    set status = 'completed', void_reason = null, updated_at = now(), version = pi.version + 1
+    from meeting_attendance ma
+    join meetings m on m.id = ma.meeting_id
+    join people p on p.id = ma.person_id
+    where pi.source_key = 'meeting_attendance:' || ma.id and pi.status = 'voided' and pi.void_reason = ${REVOKED_REASON} and ma.revoked_at is null ${filters}
+    returning pi.id
+  `.execute(db);
+
+  const updated = await sql<{ id: string }>`
+    update person_interactions pi
+    set occurred_at = ma.checked_in_at, occurred_precision = ma.occurred_precision, updated_at = now(), version = pi.version + 1
+    from meeting_attendance ma
+    join meetings m on m.id = ma.meeting_id
+    join people p on p.id = ma.person_id
+    where pi.source_key = 'meeting_attendance:' || ma.id and pi.status <> 'voided' and ma.revoked_at is null
+      and ma.checked_in_at is not null and ma.occurred_precision in ('exact_datetime', 'date_only')
+      and (pi.occurred_at <> ma.checked_in_at or pi.occurred_precision <> ma.occurred_precision) ${filters}
+    returning pi.id
+  `.execute(db);
+
+  return { created: created.rows.length, reactivated: reactivated.rows.length, voided: voided.rows.length, updated: updated.rows.length };
 }

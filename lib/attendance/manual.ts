@@ -6,6 +6,7 @@ import { canAccessMeeting, isPersonInScope, isUuid } from "../scope/organization
 import type { SessionUser } from "../permissions/can.js";
 import type { AttendanceEventType, AttendancePrecision } from "../db/schema.js";
 import { insertAttendanceEvents, type AttendanceTrx } from "./events.js";
+import { syncAttendanceInteractions } from "../interactions/participation-sync.js";
 
 assertServerOnly("lib/attendance/manual.ts");
 
@@ -164,6 +165,7 @@ export async function registerAttendanceManually(
         occurred_precision: time.precision,
       },
     ]);
+    await syncAttendanceInteractions(trx, { attendanceIds: [inserted.id], actorUserId: actor.id });
     return { changed: true };
   });
 }
@@ -197,6 +199,7 @@ export async function revokeAttendance(actor: SessionUser, input: { meetingId: s
     await insertAttendanceEvents(trx, [
       { attendance_id: row.id, meeting_id: row.meeting_id, person_id: row.person_id, event_type: "revoked", occurred_at: now, recorded_by: actor.id, reason },
     ]);
+    await syncAttendanceInteractions(trx, { attendanceIds: [row.id] });
     return { changed: true };
   });
 }
@@ -217,6 +220,7 @@ export async function restoreAttendance(actor: SessionUser, input: { meetingId: 
     await insertAttendanceEvents(trx, [
       { attendance_id: row.id, meeting_id: row.meeting_id, person_id: row.person_id, event_type: "restored", occurred_at: now, recorded_by: actor.id, reason },
     ]);
+    await syncAttendanceInteractions(trx, { attendanceIds: [row.id] });
     return { changed: true };
   });
 }
@@ -248,6 +252,8 @@ export async function correctAttendance(
         recorded_by: actor.id, reason, checked_in_at: time.checkedInAt, occurred_precision: time.precision,
       },
     ]);
+    // La hora corregida actualiza la interacción existente; una asistencia «desconocida» corregida a una fecha real la crea.
+    await syncAttendanceInteractions(trx, { attendanceIds: [row.id], actorUserId: actor.id });
     return { changed: true };
   });
 }

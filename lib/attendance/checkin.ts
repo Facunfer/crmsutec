@@ -7,6 +7,7 @@ import { normalizeDni, normalizeEmail, normalizePhone } from "../people/normaliz
 import { isQrWithinWindow, verifyQrSignature, DEFAULT_ROTATION_SECONDS } from "./qr.js";
 import { signPendingCheckin, verifyPendingCheckin, type PendingIdentification } from "./session-tokens.js";
 import { insertAttendanceEvents } from "./events.js";
+import { syncAttendanceInteractions } from "../interactions/participation-sync.js";
 
 assertServerOnly("lib/attendance/checkin.ts");
 
@@ -305,6 +306,8 @@ async function recordCheckIn(
           attendance_method: method, identification, checked_in_at: now, occurred_precision: "exact_datetime",
         },
       ]);
+      // Escanear deja la interacción «Asistió a…» en la ficha, en la MISMA transacción (decisión del titular, 22/10/2026).
+      await syncAttendanceInteractions(trx, { attendanceIds: [inserted.id] });
       return { kind: "ok", firstName: person.first_name, checkedInAt: now };
     }
 
