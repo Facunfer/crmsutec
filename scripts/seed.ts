@@ -11,6 +11,7 @@ import {
 } from "../lib/db/guards.js";
 import { MODULES, PERMISSIONS, ROLE_PERMISSIONS, ROLES } from "../lib/permissions/catalog.js";
 import { toJsonb } from "../lib/db/json.js";
+import { ensureFormSystemUser } from "../lib/auth/system-users.js";
 import type { Json } from "../lib/db/schema.js";
 
 /** Configuración por defecto; solo se inserta si la clave todavía no existe. */
@@ -217,6 +218,9 @@ export async function runSeed(): Promise<void> {
       .onConflict((oc) => oc.column("key").doNothing())
       .execute();
   }
+
+  // Autor de las inscripciones automáticas desde formularios (inactivo, sin acceso). La migración 0048 ya lo crea en bases con roles.
+  await ensureFormSystemUser(db);
 
   console.log(
     `[seed] listo. ${ROLES.length} roles, ${MODULES.length} módulos, ${PERMISSIONS.length} permisos, ` +

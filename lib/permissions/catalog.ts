@@ -165,6 +165,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
   REUNIONES: [
     "dashboard.view",
     "meetings.view",
+    "meetings.create",
+    "meetings.edit",
     "meetings.change_status",
     "meetings.manage_invitations",
     "meetings.attendance_manual",

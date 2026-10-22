@@ -16,7 +16,8 @@ const formCommands = await import("../../lib/forms/commands.js");
 const { runF0Preflight } = await import("../../scripts/preflight-f0.js");
 
 const dataDir = process.env.SUTECBA_PGLITE_DATA_DIR!;
-const onDisk = readdirSync("db/migrations").filter((f) => f.endsWith(".sql")).sort();
+// El preflight de F0 describe el salto 0046/0047: las migraciones posteriores no forman parte de ese salto.
+const onDisk = readdirSync("db/migrations").filter((f) => f.endsWith(".sql") && Number(f.slice(0, 4)) <= 47).sort();
 let db: Awaited<ReturnType<typeof getDb>>;
 let master: any;
 let orgA: string;
@@ -35,6 +36,8 @@ async function preflight() {
 /** Deja la base como estaría ANTES de desplegar F0: las dos migraciones figuran como pendientes. */
 async function markPending() {
   await sql`delete from sutecba_migrations where filename in ('0046_public_link_attempts_hardening.sql', '0047_meetings_accredit_permission.sql')`.execute(db);
+  // El preflight describe el salto 0046/0047: las migraciones posteriores (0048+) no forman parte de ese estado «antes de F0».
+  await sql`delete from sutecba_migrations where filename >= '0048'`.execute(db);
 }
 async function markApplied() {
   for (const filename of ["0046_public_link_attempts_hardening.sql", "0047_meetings_accredit_permission.sql"]) {

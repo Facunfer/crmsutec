@@ -458,7 +458,15 @@ export interface FormsTable {
   default_meeting_id: string | null;
   person_creation_policy: Generated<FormPersonCreationPolicy>;
   apply_data_policy: Generated<FormApplyDataPolicy>;
+  // 0048
+  enrollment_mode: Generated<FormEnrollmentMode>;
 }
+
+/**
+ * 0048: «never» por defecto (completar un formulario NO inscribe). Los demás modos inscriben, con las reglas de B4, solo si el envío
+ * quedó vinculado sin ambigüedad: single_meeting (reunión fija) · campaign_all (todas las jornadas) · campaign_selected (las elegidas).
+ */
+export type FormEnrollmentMode = "never" | "single_meeting" | "campaign_all" | "campaign_selected";
 
 /** 0043: «never» por defecto. Solo `when_valid_dni` crea personas desde un envío sin coincidencia (y con DNI válido). */
 export type FormPersonCreationPolicy = "never" | "when_valid_dni";
@@ -499,7 +507,7 @@ export interface FormActionsTable {
 
 export type SubmissionMatchResult = "pending" | "created" | "matched" | "needs_review" | "error" | "unlinked";
 export type SubmissionSource = "public" | "csv_import" | "manual";
-export type FormSubmissionEventType = "auto_linked" | "auto_person_created" | "auto_data_applied" | "linked" | "person_created" | "data_applied" | "enrolled";
+export type FormSubmissionEventType = "auto_linked" | "auto_person_created" | "auto_data_applied" | "linked" | "person_created" | "data_applied" | "enrolled" | "auto_enrolled";
 
 export interface FormSubmissionsTable {
   id: Generated<string>;
