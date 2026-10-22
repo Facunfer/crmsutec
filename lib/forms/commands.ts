@@ -12,6 +12,7 @@ import { buildFieldValidation, parseOptionsText, type FieldInput, type FormMetaI
 import type { FormVersionSchema } from "./version-schema.js";
 import { dniPublishError } from "./publish-rules.js";
 import { isAssociationAllowedForForm } from "./queries.js";
+import { buildFormSnapshot } from "./snapshot.js";
 
 assertServerOnly("lib/forms/commands.ts");
 
@@ -326,26 +327,7 @@ export async function publishForm(actor: SessionUser, formId: string): Promise<{
   const actions = await db.selectFrom("form_actions").selectAll().where("form_id", "=", formId).orderBy("sort_order", "asc").execute();
   await assertAssociationActionsInScope(actor, form.owner_organization_id, actions.map((a) => ({ actionType: a.action_type, config: (a.config ?? {}) as { associationId?: string } })));
 
-  const policy = (form.identification_policy ?? {}) as { matchFields?: string[] };
-  const snapshot: FormVersionSchema = {
-    name: form.name,
-    consentText: form.consent_text,
-    successMessage: form.success_message,
-    identificationPolicy: { matchFields: (policy.matchFields ?? ["dni", "email", "phone"]) as Array<"dni" | "email" | "phone"> },
-    fields: fields.map((f) => ({
-      key: f.key,
-      label: f.label,
-      fieldType: f.field_type,
-      options: parseFieldOptions(f.options),
-      required: f.required,
-      visible: f.visible,
-      sortOrder: f.sort_order,
-      personFieldMapping: f.person_field_mapping,
-      description: f.description,
-      validation: parseFieldValidation(f.validation),
-    })),
-    actions: actions.map((a) => ({ actionType: a.action_type, config: (a.config ?? {}) as { associationId?: string } })),
-  };
+  const snapshot = buildFormSnapshot(form, fields, actions);
 
   const maxVersion = await db
     .selectFrom("form_versions")

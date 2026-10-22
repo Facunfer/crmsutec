@@ -9,7 +9,8 @@ import { FIELD_TYPES, isCorePersonMapping } from "./field-types.js";
 import { getFormBySlug, getPublishedVersionSchema } from "./queries.js";
 import { applyActions, applyFieldsToPerson, createPersonFromSubmission, splitCoreAndCustomValues, submissionDni } from "./apply.js";
 import { insertSubmissionEvents } from "./events.js";
-import type { FormApplyDataPolicy, FormPersonCreationPolicy } from "../db/schema.js";
+import { enrollFromFormAsSystem } from "../meetings/registrations.js";
+import type { FormApplyDataPolicy, FormEnrollmentMode, FormPersonCreationPolicy } from "../db/schema.js";
 import { matchPerson } from "./matching.js";
 import type { FormVersionField, FormVersionSchema } from "./version-schema.js";
 
@@ -202,6 +203,7 @@ export async function submitForm(
     await processSubmission(inserted.id, form.id, form.ownerOrganizationId, schema, normalizedValues, {
       personCreation: form.personCreationPolicy,
       applyData: form.applyDataPolicy,
+      enrollment: { mode: form.enrollmentMode, meetingId: form.meetingId, campaignId: form.campaignId },
     });
   } catch (err) {
     await db
@@ -219,6 +221,48 @@ export async function submitForm(
 interface ProcessingPolicy {
   personCreation: FormPersonCreationPolicy;
   applyData: FormApplyDataPolicy;
+  /** Destino de la inscripción automática (0048). Con modo «never» el envío no inscribe. */
+  enrollment: { mode: FormEnrollmentMode; meetingId: string | null; campaignId: string | null };
+}
+
+/**
+ * Inscripción AUTOMÁTICA (Etapa 1c): solo cuando el formulario lo pide (`enrollment_mode`) y la persona quedó vinculada o creada SIN
+ * ambigüedad. Una respuesta en revisión o sin vincular NUNCA inscribe: lo decide un operador. Un fallo al inscribir no afecta a la respuesta
+ * pública (ya está guardada y vinculada, y el visitante ve el mismo «ok»): el operador puede inscribirla después con «Inscribir respuestas».
+ *   - single_meeting: la reunión fija del formulario.
+ *   - campaign_all: todas las jornadas VIGENTES de la campaña (borrador, programada o en curso; no canceladas ni finalizadas).
+ *   - campaign_selected: todavía no inscribe (necesita una pregunta de opción múltiple): queda para el operador.
+ */
+async function autoEnrollSubmission(policy: ProcessingPolicy, submissionId: string, formId: string, personId: string): Promise<void> {
+  const { mode, meetingId, campaignId } = policy.enrollment;
+  if (mode === "never" || mode === "campaign_selected") return;
+  const db = await getDb();
+  try {
+    let meetingIds: string[] = [];
+    if (mode === "single_meeting" && meetingId) {
+      meetingIds = [meetingId];
+    } else if (mode === "campaign_all" && campaignId) {
+      const rows = await db
+        .selectFrom("meetings")
+        .select("id")
+        .where("campaign_id", "=", campaignId)
+        .where("status", "in", ["draft", "scheduled", "in_progress"])
+        .orderBy("starts_at", "asc")
+        .execute();
+      meetingIds = rows.map((r) => r.id);
+    }
+    if (meetingIds.length === 0) return;
+    const submission = await db.selectFrom("form_submissions").select("created_at").where("id", "=", submissionId).executeTakeFirstOrThrow();
+    for (const id of meetingIds) {
+      try {
+        await enrollFromFormAsSystem({ submissionId, formId, personId, meetingId: id, submittedAt: submission.created_at });
+      } catch (err) {
+        console.warn(`[forms] inscripción automática fallida (formulario ${formId}): ${err instanceof Error ? err.name : "error"}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[forms] inscripción automática fallida (formulario ${formId}): ${err instanceof Error ? err.name : "error"}`);
+  }
 }
 
 /**
@@ -228,7 +272,8 @@ interface ProcessingPolicy {
  *  - NO se completan datos de la persona salvo `apply_data_policy = fill_empty_only` (solo campos vacíos);
  *  - sin coincidencia → «sin vincular» (match_result = 'unlinked'): un operador decide (vincular / crear / aplicar datos);
  *  - ambigua o fuera de la unidad → revisión (person_duplicate_candidates), sin modificar a nadie.
- * Completar un formulario NUNCA inscribe, no crea participación ni asistencia ni contacto.
+ * Completar un formulario NO crea asistencia ni contacto. Inscribe SOLO si el formulario lo pide (`enrollment_mode`, 0048; por defecto «never»)
+ * y la persona quedó vinculada o creada sin ambigüedad: ver `autoEnrollSubmission`.
  */
 async function processSubmission(
   submissionId: string,
@@ -263,6 +308,7 @@ async function processSubmission(
       .execute();
     await insertSubmissionEvents(db, [{ submission_id: submissionId, event_type: "auto_person_created", person_id: personId, recorded_by: null, details: { policy: "when_valid_dni" } }]);
     await applyActions(schema, personId, normalizedValues, ownerOrganizationId);
+    await autoEnrollSubmission(policy, submissionId, formId, personId);
     return;
   }
 
@@ -320,6 +366,7 @@ async function processSubmission(
       }
     }
     await applyActions(schema, outcome.personId, normalizedValues, ownerOrganizationId);
+    await autoEnrollSubmission(policy, submissionId, formId, outcome.personId);
     return;
   }
 

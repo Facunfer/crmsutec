@@ -280,7 +280,7 @@ export async function enrollSubmissions(
         .select(["participation_id"])
         .where("submission_id", "=", submissionId)
         .where("meeting_id", "=", meetingId)
-        .where("event_type", "=", "enrolled")
+        .where("event_type", "in", ["enrolled", "auto_enrolled"])
         .executeTakeFirst();
       if (prior) {
         results.push({ submissionId, status: "already_enrolled_from_submission", participationId: prior.participation_id ?? undefined });

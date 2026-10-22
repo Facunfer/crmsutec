@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 import { getDb } from "../db/client.js";
 import { assertServerOnly } from "../server-only.js";
-import type { FormApplyDataPolicy, FormPersonCreationPolicy, FormStatus, FormSubmissionEventType, PersonFieldType, SubmissionMatchResult, SubmissionSource } from "../db/schema.js";
+import type { FormApplyDataPolicy, FormEnrollmentMode, FormPersonCreationPolicy, FormStatus, FormSubmissionEventType, PersonFieldType, SubmissionMatchResult, SubmissionSource } from "../db/schema.js";
 import { parseFieldValidation, type FieldValidation } from "./field-types.js";
 import type { FormVersionSchema } from "./version-schema.js";
 import type { SessionUser } from "../permissions/can.js";
@@ -95,6 +95,8 @@ export interface FormDetail {
   defaultMeetingId: string | null;
   personCreationPolicy: FormPersonCreationPolicy;
   applyDataPolicy: FormApplyDataPolicy;
+  // 0048
+  enrollmentMode: FormEnrollmentMode;
 }
 
 /** null si no existe O está fuera del alcance del usuario (no se distingue). */
@@ -123,6 +125,7 @@ export async function getFormById(actor: SessionUser, id: string): Promise<FormD
     defaultMeetingId: row.default_meeting_id,
     personCreationPolicy: row.person_creation_policy,
     applyDataPolicy: row.apply_data_policy,
+    enrollmentMode: row.enrollment_mode,
   };
 }
 
@@ -150,6 +153,7 @@ export async function getFormBySlug(slug: string): Promise<FormDetail | null> {
     defaultMeetingId: row.default_meeting_id,
     personCreationPolicy: row.person_creation_policy,
     applyDataPolicy: row.apply_data_policy,
+    enrollmentMode: row.enrollment_mode,
   };
 }
 

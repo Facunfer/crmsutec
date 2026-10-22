@@ -6,6 +6,8 @@ import type { Database, RegistrationChannel, RegistrationEventType } from "../db
 import type { SessionUser } from "../permissions/can.js";
 import { campaignVisibility, canAccessMeeting, isPersonInScope, isUuid, orgScope, personInScope } from "../scope/organizations.js";
 import { INVITATION_CHANNELS, isInvitationChannel } from "../activities/labels.js";
+import { ensureFormSystemUser } from "../auth/system-users.js";
+import { insertSubmissionEvents } from "../forms/events.js";
 
 assertServerOnly("lib/meetings/registrations.ts");
 
@@ -222,6 +224,89 @@ export async function enrollPerson(
       if (n > meeting.capacity) capacityWarning = { capacity: meeting.capacity, registered: n };
     }
     return { changed: true, participationId: inserted.id, capacityWarning };
+  });
+}
+
+/** Resultado de la inscripción automática de una respuesta en UNA reunión/jornada. */
+export type SystemFormEnrollmentOutcome =
+  /** Se creó la inscripción y su provenance `auto_enrolled`. */
+  | "enrolled"
+  /** La persona ya estaba inscripta (otra respuesta, un operador, un listado importado): no se escribió nada. */
+  | "already_registered"
+  /** Un operador ANULÓ su inscripción: no se reactiva sola (decisión humana). */
+  | "voided"
+  /** La reunión no admite inscripciones automáticas (cancelada, finalizada o inexistente). */
+  | "closed"
+  /** La persona no está activa. */
+  | "person_inactive";
+
+/**
+ * INSCRIPCIÓN AUTOMÁTICA desde una respuesta pública (Etapa 1c): la ejecuta el procesamiento del envío cuando `forms.enrollment_mode` lo pide
+ * y la persona quedó vinculada sin ambigüedad. NO hay un usuario que la cargue, así que se atribuye al usuario de sistema «Sistema (formularios)»
+ * (inactivo, sin acceso): una inscripción operativa exige `recorded_by` (0041/0042) y «sin usuario» significaría histórica/importada.
+ *
+ * Mismas reglas de B4 que la manual: UNA fila canónica en `meeting_participations` (kind `registration`, canal `form`) con su evento
+ * `registered`; idempotente; no crea invitación, respuesta, asistencia ni interacción; solo estados draft/scheduled/in_progress (nunca una carga
+ * retroactiva: eso lo decide un operador con motivo). No exige permisos de sesión (no hay sesión): quien la invoca ya comprobó que la persona
+ * está dentro de la unidad del formulario y que la reunión es su destino. La fecha de la inscripción es la del envío. La provenance
+ * `auto_enrolled` se registra en la MISMA transacción, y solo cuando esta respuesta originó la inscripción.
+ */
+export async function enrollFromFormAsSystem(input: {
+  submissionId: string;
+  personId: string;
+  meetingId: string;
+  submittedAt: Date;
+  formId?: string;
+}): Promise<{ outcome: SystemFormEnrollmentOutcome; participationId?: string }> {
+  const db = await getDb();
+  const systemUserId = await ensureFormSystemUser(db);
+  return db.transaction().execute(async (trx) => {
+    const meeting = await trx.selectFrom("meetings").select(["status"]).where("id", "=", input.meetingId).executeTakeFirst();
+    if (!meeting || !NORMAL_STATUSES.has(meeting.status)) return { outcome: "closed" };
+    const person = await trx.selectFrom("people").select(["id", "status"]).where("id", "=", input.personId).executeTakeFirst();
+    if (!person || person.status !== "active") return { outcome: "person_inactive" };
+
+    const inserted = await trx
+      .insertInto("meeting_participations")
+      .values({
+        meeting_id: input.meetingId,
+        person_id: input.personId,
+        participation_kind: "registration",
+        participation_basis: "standard",
+        recorded_by: systemUserId,
+        origin_channel: "form",
+        registered_at: input.submittedAt,
+        registered_at_precision: "exact_datetime",
+      })
+      .onConflict((oc) => oc.doNothing())
+      .returning("id")
+      .executeTakeFirst();
+
+    if (!inserted) {
+      const existing = await trx
+        .selectFrom("meeting_participations")
+        .select(["id", "voided_at"])
+        .where("meeting_id", "=", input.meetingId)
+        .where("person_id", "=", input.personId)
+        .where("participation_kind", "=", "registration")
+        .executeTakeFirst();
+      if (existing?.voided_at) return { outcome: "voided", participationId: existing.id };
+      return { outcome: "already_registered", participationId: existing?.id };
+    }
+
+    await insertEvents(trx, [
+      {
+        participation_id: inserted.id, person_id: input.personId, event_type: "registered", occurred_at: new Date(), recorded_by: systemUserId, reason: null,
+        origin_channel: "form", registered_at: input.submittedAt, registered_at_precision: "exact_datetime",
+      },
+    ]);
+    await insertSubmissionEvents(trx, [
+      {
+        submission_id: input.submissionId, event_type: "auto_enrolled", person_id: input.personId, meeting_id: input.meetingId, participation_id: inserted.id,
+        recorded_by: null, details: { formId: input.formId ?? null },
+      },
+    ]);
+    return { outcome: "enrolled", participationId: inserted.id };
   });
 }
 
