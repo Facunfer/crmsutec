@@ -8,8 +8,6 @@ import { CAMPAIGN_TYPE_LABEL, campaignDatesLabel, campaignStatusLabel } from "@/
 import { listMeetings, type MeetingListFilter } from "@/lib/meetings/queries";
 import { STATUS_LABEL } from "@/lib/meetings/state-machine";
 import { formatMeetingWhen } from "@/lib/meetings/when";
-import { listAreaOptions, listOrgTreeOptions } from "@/lib/organizations/areas";
-import { CreateMeetingForm } from "./CreateMeetingForm";
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Argentina/Buenos_Aires" }).format(date);
@@ -42,18 +40,20 @@ export default async function ReunionesPage({
   ]);
   // Las jornadas de campaña se ven dentro de su campaña; en la tabla de reuniones se marcan para distinguirlas.
   const meetings = tipo === "campanas" ? [] : allMeetings;
-  const orgTree = can(actor, "meetings.create") ? await listOrgTreeOptions(actor) : [];
-  const areas = can(actor, "meetings.create") ? await listAreaOptions(actor, orgTree) : [];
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-brand-900">Actividades</h1>
+        {can(actor, "meetings.create") ? (
+          <Link
+            href={preselectedAssociationId ? `/reuniones/nueva?associationId=${encodeURIComponent(preselectedAssociationId)}` : "/reuniones/nueva"}
+            className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+          >
+            + Nueva actividad
+          </Link>
+        ) : null}
       </div>
-
-      {can(actor, "meetings.create") ? (
-        <CreateMeetingForm preselectedAssociationId={preselectedAssociationId} areas={areas} orgTree={orgTree} />
-      ) : null}
 
       <div className="flex flex-wrap gap-2 text-sm">
         {(["todas", "campanas", "reuniones"] as const).map((t) => (
